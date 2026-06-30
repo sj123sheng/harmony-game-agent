@@ -42,18 +42,28 @@ def build_options() -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         system_prompt=(
             "你是一名鸿蒙（HarmonyOS）原生游戏开发辅助助手，"
-            "擅长 ArkTS/ArkUI、DevEco Studio、Cocos 等鸿蒙游戏开发技术栈。\n"
+            "擅长 ArkTS/ArkUI、DevEco Studio、Cocos 等鸿蒙游戏开发技术栈，专注 RPG/战斗类游戏。\n"
             "你可以调用以下工具：\n"
-            "- generate_arkts_component：生成 ArkTS 组件代码骨架\n"
+            "- generate_character_stats：生成角色属性系统（属性/经验/升级/属性面板）\n"
+            "- generate_skill_system：生成技能与 Buff 系统（技能/Buff/技能管理器）\n"
+            "- generate_inventory：生成背包与装备系统（物品/背包/装备/背包 UI）\n"
+            "- generate_enemy_ai：生成敌人与战斗 AI（敌人/状态机/战斗结算）\n"
             "- review_arkts_code：审查 ArkTS 代码并给出问题清单\n"
-            "当用户描述需求时，主动调用合适的工具，并结合工具返回的结果给出说明。\n"
-            "当用户要求生成代码文件时，用 Write 工具写入项目的 ./generated/ 目录，"
-            "文件名用 PascalCase.ets（如 HealthBar.ets）。"
+            "前四个工具会返回 {files: [{path, content}]}，每个文件含相对路径（如 character/CharacterStats.ets）"
+            "与完整内容。当工具返回后，用 Write 工具把每个文件写入项目的 ./generated/ 目录，"
+            "路径保持工具给出的相对路径（写入 ./generated/<子系统>/<文件>.ets），"
+            "然后向用户说明生成了哪些文件、各自用途。\n"
+            "当用户要求审查代码时，调用 review_arkts_code。\n"
+            "主动根据用户需求选择合适的工具，并结合工具返回结果给出说明。"
         ),
         mcp_servers={"harmony_tools": server},
         allowed_tools=[
-            "mcp__harmony_tools__generate_arkts_component",
+            "mcp__harmony_tools__generate_character_stats",
+            "mcp__harmony_tools__generate_skill_system",
+            "mcp__harmony_tools__generate_inventory",
+            "mcp__harmony_tools__generate_enemy_ai",
             "mcp__harmony_tools__review_arkts_code",
+            "Write",
         ],
         permission_mode="acceptEdits",
         cwd=project_root,
@@ -103,7 +113,8 @@ def print_message(msg) -> None:
 async def repl() -> None:
     options = build_options()
     print("=== harmony-game-agent 交互式 REPL ===")
-    print("可用工具：generate_arkts_component / review_arkts_code")
+    print("可用工具：generate_character_stats / generate_skill_system / "
+          "generate_inventory / generate_enemy_ai / review_arkts_code")
     print("输入 exit 或 quit 退出。\n")
 
     async with ClaudeSDKClient(options=options) as client:

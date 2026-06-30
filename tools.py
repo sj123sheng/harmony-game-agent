@@ -1,8 +1,7 @@
 """harmony-game-agent 自定义工具集。
 
-两个 in-process MCP 工具：
-- generate_arkts_component: 生成 ArkTS 组件代码骨架（确定性模板）
-- review_arkts_code: 用 LLM 智能审查 ArkTS 代码（anthropic SDK 直接调用）
+4 个 RPG 子系统生成工具（混合：确定性模板骨架 + LLM 填充）+ 1 个 ArkTS 代码审查工具。
+生成工具通过共享 framework.hybrid_generate 统一渲染/填充/组装多文件，返回 {files} 给主 Agent 写盘。
 """
 
 import os
@@ -11,40 +10,103 @@ from anthropic import AsyncAnthropic
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from generators import (
+    build_character_stats_spec,
+    build_enemy_ai_spec,
+    build_inventory_spec,
+    build_skill_system_spec,
+    hybrid_generate,
+)
+
+
+def _format_files(result: dict) -> str:
+    """把 hybrid_generate 的 {files,error} 格式化成可读文本，供主 Agent 据此 Write。"""
+    parts = []
+    if result.get("error"):
+        parts.append(f"[注意] {result['error']}")
+    files = result.get("files", [])
+    parts.append(f"已生成 {len(files)} 个文件（请用 Write 写入 ./generated/ 下对应路径）：")
+    for f in files:
+        parts.append(f"\n=== {f['path']} ===\n{f['content']}")
+    return "\n".join(parts)
+
 
 @tool(
-    "generate_arkts_component",
-    "生成一个 ArkTS 组件代码骨架。需提供组件名、功能描述，以及是否为入口组件（@Entry）。",
-    {"component_name": str, "description": str, "is_entry": bool},
+    "generate_character_stats",
+    build_character_stats_spec().description,
+    build_character_stats_spec().input_schema,
 )
-async def generate_arkts_component(args):
-    name = args["component_name"]
-    description = args["description"]
-    is_entry = args.get("is_entry", False)
+async def generate_character_stats(args):
+    spec = build_character_stats_spec()
+    args = {
+        "character_name": args["character_name"],
+        "archetype": args["archetype"],
+        "level_cap": args.get("level_cap", 99),
+    }
+    try:
+        result = await hybrid_generate(spec, args)
+    except Exception as e:
+        return {"content": [{"type": "text", "text": f"生成失败：{e}"}]}
+    return {"content": [{"type": "text", "text": _format_files(result)}]}
 
-    # 入口组件加 @Entry 装饰器
-    entry_decorator = "@Entry\n" if is_entry else ""
-    code = f"""// {description}
-@Component
-{entry_decorator}struct {name} {{
-  @State count: number = 0
 
-  build() {{
-    Column() {{
-      Text(this.count.toString())
-        .fontSize(24)
-        .margin(20)
-      Button('点击 +1')
-        .onClick(() => {{
-          this.count++
-        }})
-    }}
-    .width('100%')
-    .height('100%')
-    .justifyContent(FlexAlign.Center)
-  }}
-}}"""
-    return {"content": [{"type": "text", "text": code}]}
+@tool(
+    "generate_skill_system",
+    build_skill_system_spec().description,
+    build_skill_system_spec().input_schema,
+)
+async def generate_skill_system(args):
+    spec = build_skill_system_spec()
+    args = {
+        "skill_count": args.get("skill_count", 4),
+        "include_buffs": args.get("include_buffs", True),
+        "combat_style": args["combat_style"],
+    }
+    try:
+        result = await hybrid_generate(spec, args)
+    except Exception as e:
+        return {"content": [{"type": "text", "text": f"生成失败：{e}"}]}
+    return {"content": [{"type": "text", "text": _format_files(result)}]}
+
+
+@tool(
+    "generate_inventory",
+    build_inventory_spec().description,
+    build_inventory_spec().input_schema,
+)
+async def generate_inventory(args):
+    spec = build_inventory_spec()
+    stackable = args.get("stackable", True)
+    args = {
+        "slot_count": args.get("slot_count", 20),
+        "equipment_slots": args.get("equipment_slots", ["头", "身", "手", "脚", "武器"]),
+        "stackable": stackable,
+        "stack_state": "支持堆叠" if stackable else "不可堆叠",
+    }
+    try:
+        result = await hybrid_generate(spec, args)
+    except Exception as e:
+        return {"content": [{"type": "text", "text": f"生成失败：{e}"}]}
+    return {"content": [{"type": "text", "text": _format_files(result)}]}
+
+
+@tool(
+    "generate_enemy_ai",
+    build_enemy_ai_spec().description,
+    build_enemy_ai_spec().input_schema,
+)
+async def generate_enemy_ai(args):
+    spec = build_enemy_ai_spec()
+    args = {
+        "enemy_name": args["enemy_name"],
+        "ai_pattern": args["ai_pattern"],
+        "difficulty": args["difficulty"],
+    }
+    try:
+        result = await hybrid_generate(spec, args)
+    except Exception as e:
+        return {"content": [{"type": "text", "text": f"生成失败：{e}"}]}
+    return {"content": [{"type": "text", "text": _format_files(result)}]}
 
 
 @tool(
@@ -92,5 +154,11 @@ def build_server():
     return create_sdk_mcp_server(
         name="harmony_tools",
         version="1.0.0",
-        tools=[generate_arkts_component, review_arkts_code],
+        tools=[
+            generate_character_stats,
+            generate_skill_system,
+            generate_inventory,
+            generate_enemy_ai,
+            review_arkts_code,
+        ],
     )
