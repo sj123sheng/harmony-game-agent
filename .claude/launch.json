@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "harmony-game-agent",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/xiling/Documents/project/harmony-game-agent && ANTHROPIC_MODEL=claude-sonnet-4-5 exec uv run python server.py"],
+      "port": 8000
+    }
+  ]
+}

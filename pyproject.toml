@@ -1,0 +1,12 @@
+[project]
+name = "harmony-game-agent"
+version = "0.1.0"
+description = "鸿蒙原生游戏开发辅助 Agent"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.112.0",
+    "anyio>=4.14.1",
+    "claude-agent-sdk==0.2.110",
+    "python-dotenv>=1.2.2",
+]

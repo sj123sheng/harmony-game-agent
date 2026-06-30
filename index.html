@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>harmony-game-agent · 鸿蒙游戏开发工作台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css" />
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
+<style>
+  :root {
+    --ink: #14121b;
+    --surface: #1c1925;
+    --surface-2: #252130;
+    --surface-3: #2e2940;
+    --line: #342e40;
+    --line-soft: #2a2536;
+    --text: #ece9f1;
+    --muted: #a8a2b8;
+    --muted-2: #6b6677;
+    --accent: #7c5cff;
+    --accent-2: #e649b5;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --grad: linear-gradient(135deg, var(--accent), var(--accent-2));
+    --font-display: "Space Grotesk", system-ui, sans-serif;
+    --font-sans: "IBM Plex Sans", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-mono: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: var(--font-sans);
+    background: var(--ink);
+    color: var(--text);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    content: "";
+    position: fixed; inset: 0 0 auto 0; height: 320px;
+    background: radial-gradient(ellipse 600px 240px at 30% -40%, rgba(124,92,255,.18), transparent 70%);
+    pointer-events: none; z-index: 0;
+  }
+
+  .app { display: flex; height: 100vh; position: relative; z-index: 1; }
+
+  /* ───────── 左侧轨迹轨 ───────── */
+  .rail {
+    width: 288px; flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--line);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .rail-head {
+    padding: 18px 20px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .mark {
+    width: 30px; height: 30px; border-radius: 9px;
+    background: var(--grad);
+    display: grid; place-items: center;
+    font-family: var(--font-mono); font-weight: 600; font-size: 13px; color: #fff;
+    box-shadow: 0 6px 18px -6px rgba(124,92,255,.7);
+  }
+  .brand .name { font-family: var(--font-display); font-weight: 600; font-size: 15px; letter-spacing: -.01em; }
+  .brand .name span { color: var(--muted); font-weight: 500; }
+  .rail-meta {
+    margin-top: 14px;
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--muted-2); line-height: 1.7;
+    text-transform: uppercase; letter-spacing: .08em;
+  }
+  .rail-meta b { color: var(--muted); font-weight: 500; }
+  .rail-meta .dot-ok { color: var(--ok); }
+
+  .rail-body {
+    flex: 1; overflow-y: auto;
+    padding: 16px 0 24px;
+  }
+  .rail-empty {
+    padding: 24px 20px;
+    font-size: 12.5px; color: var(--muted-2); line-height: 1.6;
+    font-family: var(--font-mono);
+  }
+  .trace-group { padding: 0 20px; margin-bottom: 18px; }
+  .trace-head {
+    display: flex; flex-direction: column; gap: 3px;
+    margin-bottom: 10px;
+  }
+  .trace-no {
+    font-family: var(--font-mono); font-size: 10.5px;
+    color: var(--accent); font-weight: 500;
+    text-transform: uppercase; letter-spacing: .14em;
+  }
+  .trace-prompt { font-size: 12.5px; color: var(--muted); line-height: 1.45; word-break: break-word; }
+
+  .spine { position: relative; padding-left: 14px; }
+  .spine::before {
+    content: ""; position: absolute; left: 4px; top: 6px; bottom: 6px;
+    width: 1px; background: var(--line);
+  }
+  .t-node {
+    position: relative; padding: 5px 0 5px 14px;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--muted); display: flex; align-items: center; gap: 8px;
+    animation: nodein .35s ease both;
+  }
+  .t-node .t-dot {
+    position: absolute; left: -2px; top: 9px;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--surface); border: 1.5px solid var(--muted-2);
+    transition: all .25s;
+  }
+  .t-node.pending .t-dot { border-color: var(--warn); background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
+  .t-node.pending { color: var(--text); }
+  .t-node.ok .t-dot { border-color: var(--ok); background: var(--ok); box-shadow: 0 0 10px -1px rgba(74,222,128,.6); }
+  .t-node.ok { color: var(--text); }
+  .t-node.err .t-dot { border-color: var(--err); background: var(--err); }
+  .t-node.err { color: var(--err); }
+  .t-node .t-tag { font-size: 10px; color: var(--muted-2); margin-left: auto; text-transform: uppercase; letter-spacing: .08em; }
+  @keyframes nodein { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
+  @keyframes pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: .55; } }
+
+  /* ───────── 主对话区 ───────── */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar {
+    height: 62px; flex-shrink: 0;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(28,25,37,.6);
+    backdrop-filter: blur(12px);
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  }
+  .topbar .title { font-family: var(--font-display); font-weight: 500; font-size: 15px; }
+  .topbar .title .sub { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 13px; }
+  .topbar .actions { display: flex; gap: 8px; }
+  .icon-btn {
+    background: transparent; border: 1px solid var(--line);
+    color: var(--muted); border-radius: 8px; padding: 6px 12px;
+    font-family: var(--font-sans); font-size: 12.5px; cursor: pointer;
+    transition: all .2s;
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  .thread {
+    flex: 1; overflow-y: auto;
+    padding: 28px 24px 12px;
+  }
+  .thread-inner {
+    max-width: 780px; margin: 0 auto;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .empty-state {
+    margin: auto; text-align: center; padding: 60px 20px;
+    color: var(--muted); max-width: 460px;
+  }
+  .empty-state .glyph {
+    width: 56px; height: 56px; border-radius: 16px; margin: 0 auto 18px;
+    background: var(--grad); display: grid; place-items: center;
+    font-family: var(--font-display); font-weight: 700; color: #fff; font-size: 24px;
+    box-shadow: 0 12px 30px -10px rgba(124,92,255,.7);
+  }
+  .empty-state h2 { font-family: var(--font-display); font-weight: 600; font-size: 20px; margin: 0 0 8px; color: var(--text); }
+  .empty-state p { font-size: 14px; line-height: 1.6; margin: 0 0 18px; }
+  .empty-state .hints { display: flex; flex-direction: column; gap: 8px; }
+  .empty-state .hint {
+    text-align: left; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 14px; font-size: 13px; color: var(--muted);
+    cursor: pointer; transition: all .2s;
+  }
+  .empty-state .hint:hover { border-color: var(--accent); color: var(--text); }
+  .empty-state .hint code { font-family: var(--font-mono); color: var(--accent); }
+
+  /* 消息 */
+  .msg { display: flex; max-width: 100%; }
+  .msg.user { justify-content: flex-end; }
+  .msg .bubble {
+    max-width: 86%; padding: 11px 15px; border-radius: 14px;
+    line-height: 1.65; font-size: 14.5px; word-break: break-word;
+  }
+  .msg.user .bubble {
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-bottom-right-radius: 5px; color: var(--text);
+  }
+  .msg.bot .bubble {
+    background: transparent; border: 1px solid var(--line);
+    border-bottom-left-radius: 5px; border-top-left: 2px solid var(--accent);
+  }
+  .bubble p:first-child { margin-top: 0; }
+  .bubble p:last-child { margin-bottom: 0; }
+  .bubble ul, .bubble ol { margin: 6px 0; padding-left: 22px; }
+  .bubble li { margin: 3px 0; }
+  .bubble a { color: var(--accent); }
+  .bubble code { font-family: var(--font-mono); font-size: 12.5px; }
+  .bubble :not(pre) > code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; color: #e6d6ff; }
+  .bubble pre {
+    position: relative; background: #0f0d16 !important;
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; overflow-x: auto; margin: 10px 0;
+  }
+  .bubble pre code { background: transparent; padding: 0; font-size: 12.5px; line-height: 1.55; }
+  .copy-btn {
+    position: absolute; top: 8px; right: 8px;
+    background: var(--surface-2); border: 1px solid var(--line);
+    color: var(--muted); border-radius: 6px; padding: 3px 9px;
+    font-family: var(--font-mono); font-size: 10.5px; cursor: pointer;
+    opacity: 0; transition: all .2s;
+  }
+  .bubble pre:hover .copy-btn { opacity: 1; }
+
+  /* 工具卡片（紧凑可折叠） */
+  .tool {
+    align-self: flex-start; max-width: 86%;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 11px; overflow: hidden;
+  }
+  .tool-head {
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 13px; cursor: pointer; user-select: none;
+    font-family: var(--font-mono); font-size: 12.5px;
+    transition: background .2s;
+  }
+  .tool-head:hover { background: var(--surface-2); }
+  .tool-head .t-glyph { color: var(--warn); font-size: 13px; }
+  .tool-head .t-name { color: var(--text); font-weight: 500; }
+  .tool-head .t-chev { margin-left: auto; color: var(--muted-2); font-size: 10px; transition: transform .2s; }
+  .tool.open .t-chev { transform: rotate(90deg); }
+  .tool-body {
+    display: none; padding: 0 13px 11px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .tool.open .tool-body { display: block; }
+  .tool-body pre {
+    margin: 8px 0 0; padding: 10px 12px;
+    background: #0f0d16; border-radius: 8px;
+    font-family: var(--font-mono); font-size: 12px; color: #d6cde6;
+    overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+    max-height: 320px; overflow-y: auto;
+  }
+
+  /* 工具结果 */
+  .result {
+    align-self: flex-start; max-width: 86%;
+    background: var(--surface); border: 1px solid var(--line);
+    border-left: 2px solid var(--ok); border-radius: 11px; overflow: hidden;
+  }
+  .result.err { border-left-color: var(--err); }
+  .result-head {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 13px; cursor: pointer; user-select: none;
+    font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+  }
+  .result-head:hover { color: var(--text); }
+  .result.err .result-head { color: var(--err); }
+  .result-head .r-chev { margin-left: auto; font-size: 10px; color: var(--muted-2); transition: transform .2s; }
+  .result.open .r-chev { transform: rotate(90deg); }
+  .result-body {
+    display: none; padding: 0 13px 11px; border-top: 1px solid var(--line-soft);
+    font-family: var(--font-mono); font-size: 12px; color: #c8c0d6;
+    white-space: pre-wrap; word-break: break-word; line-height: 1.55;
+    max-height: 360px; overflow-y: auto;
+  }
+  .result.open .result-body { display: block; }
+
+  .error-bar {
+    align-self: center; max-width: 92%;
+    background: rgba(248,113,113,.08); color: var(--err);
+    border: 1px solid rgba(248,113,113,.3); border-radius: 10px;
+    padding: 9px 14px; font-size: 13px; line-height: 1.5;
+  }
+
+  .typing { display: flex; gap: 4px; padding: 4px 2px; }
+  .typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.2s ease-in-out infinite; }
+  .typing span:nth-child(2) { animation-delay: .2s; }
+  .typing span:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%,80%,100% { opacity: .25; } 40% { opacity: 1; } }
+
+  /* 输入栏 */
+  .composer {
+    flex-shrink: 0; padding: 14px 24px 20px;
+    border-top: 1px solid var(--line);
+    background: linear-gradient(to top, var(--ink) 60%, transparent);
+  }
+  .composer-inner { max-width: 780px; margin: 0 auto; }
+  .composer-box {
+    display: flex; gap: 10px; align-items: flex-end;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 14px; padding: 8px 8px 8px 14px;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .composer-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124,92,255,.15); }
+  #input {
+    flex: 1; resize: none; border: none; background: transparent;
+    color: var(--text); font-family: var(--font-sans); font-size: 14.5px;
+    line-height: 1.55; max-height: 160px; outline: none; padding: 6px 0;
+  }
+  #input::placeholder { color: var(--muted-2); }
+  #send {
+    background: var(--grad); color: #fff; border: none;
+    border-radius: 10px; padding: 9px 18px;
+    font-family: var(--font-sans); font-weight: 600; font-size: 13.5px;
+    cursor: pointer; transition: transform .15s, opacity .2s;
+    display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+  }
+  #send:hover:not(:disabled) { transform: translateY(-1px); }
+  #send:disabled { opacity: .4; cursor: not-allowed; }
+  #send .kbd { font-family: var(--font-mono); font-size: 10px; opacity: .7; font-weight: 500; }
+  .composer-hint {
+    margin: 8px 2px 0; font-family: var(--font-mono); font-size: 10.5px;
+    color: var(--muted-2); text-transform: uppercase; letter-spacing: .06em;
+  }
+
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
+
+  /* 响应式：移动端轨迹轨折叠为顶部横条 */
+  @media (max-width: 860px) {
+    .app { flex-direction: column; }
+    .rail { width: 100%; max-height: 132px; border-right: none; border-bottom: 1px solid var(--line); }
+    .rail-head { padding: 12px 16px 10px; }
+    .rail-meta { display: none; }
+    .rail-body { padding: 8px 0 12px; display: flex; gap: 14px; overflow-x: auto; }
+    .trace-group { padding: 0 14px; margin-bottom: 0; flex-shrink: 0; min-width: 200px; }
+    .topbar { padding: 0 16px; height: 54px; }
+    .topbar .title .sub { display: none; }
+    .thread { padding: 18px 14px 8px; }
+    .composer { padding: 10px 14px 16px; }
+    .empty-state { padding: 40px 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="rail">
+    <div class="rail-head">
+      <div class="brand">
+        <div class="mark">hga</div>
+        <div class="name">harmony<span>-game-agent</span></div>
+      </div>
+      <div class="rail-meta">
+        状态 <span class="dot-ok">● 在线</span><br>
+        能力 <b>生成 · 审查 · 落盘</b><br>
+        输出 <b>./generated/</b>
+      </div>
+    </div>
+    <div class="rail-body" id="rail">
+      <div class="rail-empty" id="railEmpty">轨迹轨：每个回合的工具调用链会按顺序点亮在这里。</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="title">工作台<span class="sub">鸿蒙原生游戏开发助手</span></div>
+      <div class="actions">
+        <button class="icon-btn" id="clearBtn">清空</button>
+      </div>
+    </div>
+
+    <div class="thread" id="thread">
+      <div class="thread-inner" id="messages">
+        <div class="empty-state" id="emptyState">
+          <div class="glyph">胡</div>
+          <h2>说一句话，开始你的鸿蒙组件</h2>
+          <p>我会调用工具生成 ArkTS 骨架、审查代码，并把成品写入 ./generated/。下面是几个起点：</p>
+          <div class="hints">
+            <div class="hint" data-prompt="生成一个玩家血条入口组件 HealthBar，并审查它">生成一个玩家血条入口组件 <code>HealthBar</code>，并审查它</div>
+            <div class="hint" data-prompt="生成背包系统组件 Inventory，展示道具网格">生成背包系统组件 <code>Inventory</code></div>
+            <div class="hint" data-prompt="审查这段 ArkTS 代码：@Component struct HealthBar { build() { Text('HP').fontSize(20) } }">审查一段 ArkTS 代码</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="composer-inner">
+        <div class="composer-box">
+          <textarea id="input" rows="1" placeholder="描述你的需求，例如：生成一个带受击动画的玩家血条入口组件"></textarea>
+          <button id="send" type="submit">发送 <span class="kbd">↵</span></button>
+        </div>
+        <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · 工具调用会实时出现在左侧轨迹</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const messagesEl = document.getElementById('messages');
+const threadEl = document.getElementById('thread');
+const railEl = document.getElementById('rail');
+const railEmpty = document.getElementById('railEmpty');
+const emptyState = document.getElementById('emptyState');
+const inputEl = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+const clearBtn = document.getElementById('clearBtn');
+
+marked.setOptions({ breaks: true, gfm: true });
+
+let busy = false;
+let currentBot = null;
+let turnNo = 0;
+let currentGroup = null;
+let pendingNode = null;
+let textOpen = false;
+
+const TOOL_LABELS = {
+  'mcp__harmony_tools__generate_arkts_component': '生成组件',
+  'mcp__harmony_tools__review_arkts_code': '审查代码',
+  'Bash': '执行命令',
+  'Read': '读取文件',
+  'Write': '写入文件',
+  'Edit': '编辑文件',
+  'Glob': '查找文件',
+  'Grep': '搜索内容',
+  'LS': '列目录',
+};
+function shortToolName(full) {
+  if (TOOL_LABELS[full]) return TOOL_LABELS[full];
+  const tail = full.split('__').pop();
+  return tail.charAt(0).toUpperCase() + tail.slice(1);
+}
+
+function scrollThread() { threadEl.scrollTop = threadEl.scrollHeight; }
+function scrollRail() { railEl.scrollTop = railEl.scrollHeight; railEl.scrollLeft = railEl.scrollWidth; }
+
+function hideEmpty() { if (emptyState && emptyState.parentNode) emptyState.remove(); }
+
+function addUser(text) {
+  hideEmpty();
+  const div = document.createElement('div');
+  div.className = 'msg user';
+  div.innerHTML = '<div class="bubble"></div>';
+  div.querySelector('.bubble').textContent = text;
+  messagesEl.appendChild(div);
+  scrollThread();
+}
+
+function newBotBubble() {
+  hideEmpty();
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.innerHTML = '<div class="bubble"></div>';
+  messagesEl.appendChild(div);
+  currentBot = div.querySelector('.bubble');
+  scrollThread();
+  return currentBot;
+}
+
+function renderMarkdown(el, text) {
+  el.innerHTML = marked.parse(text);
+  el.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch(e){} });
+  el.querySelectorAll('pre').forEach(pre => {
+    if (pre.dataset.enh) return;
+    pre.dataset.enh = '1';
+    const code = pre.querySelector('code');
+    const btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.textContent = '复制';
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(code ? code.textContent : pre.textContent);
+      btn.textContent = '已复制';
+      setTimeout(() => btn.textContent = '复制', 1400);
+    });
+    pre.appendChild(btn);
+  });
+}
+
+function appendText(text) {
+  if (!currentBot) {
+    newBotBubble();
+    if (currentGroup && !textOpen) { traceNode('回复', 'ok'); textOpen = true; }
+  }
+  currentBot.dataset.buf = (currentBot.dataset.buf || '') + text;
+  renderMarkdown(currentBot, currentBot.dataset.buf);
+  scrollThread();
+}
+
+function addTyping() {
+  if (currentBot) return;
+  hideEmpty();
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.innerHTML = '<div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>';
+  messagesEl.appendChild(div);
+  scrollThread();
+}
+function removeTyping() {
+  const t = messagesEl.querySelector('.typing');
+  if (t) { t.closest('.msg').remove(); }
+}
+
+function finalizeBot() { currentBot = null; textOpen = false; }
+
+function addToolCard(name, input) {
+  finalizeBot();
+  const div = document.createElement('div');
+  div.className = 'tool';
+  const head = document.createElement('div');
+  head.className = 'tool-head';
+  head.innerHTML = '<span class="t-glyph">▣</span><span class="t-name"></span><span class="t-chev">▶</span>';
+  head.querySelector('.t-name').textContent = '调用 · ' + shortToolName(name);
+  const body = document.createElement('div');
+  body.className = 'tool-body';
+  const pre = document.createElement('pre');
+  pre.textContent = JSON.stringify(input, null, 2);
+  body.appendChild(pre);
+  head.addEventListener('click', () => div.classList.toggle('open'));
+  div.appendChild(head); div.appendChild(body);
+  messagesEl.appendChild(div);
+  scrollThread();
+}
+
+function addResultCard(text, isError) {
+  finalizeBot();
+  const div = document.createElement('div');
+  div.className = 'result' + (isError ? ' err' : '');
+  const head = document.createElement('div');
+  head.className = 'result-head';
+  head.innerHTML = (isError ? '<span>✕</span>' : '<span>✓</span>') + '<span class="r-label"></span><span class="r-chev">▶</span>';
+  head.querySelector('.r-label').textContent = isError ? '工具结果 · 错误 · 点击展开' : '工具结果 · 点击展开';
+  const body = document.createElement('div');
+  body.className = 'result-body';
+  body.textContent = text;
+  head.addEventListener('click', () => div.classList.toggle('open'));
+  div.appendChild(head); div.appendChild(body);
+  messagesEl.appendChild(div);
+  scrollThread();
+}
+
+function addErrorBar(msg) {
+  finalizeBot();
+  const div = document.createElement('div');
+  div.className = 'error-bar';
+  div.textContent = '错误：' + msg;
+  messagesEl.appendChild(div);
+  scrollThread();
+}
+
+/* ── 轨迹轨 ── */
+function startTurn(prompt) {
+  if (railEmpty) railEmpty.remove();
+  turnNo += 1;
+  currentGroup = document.createElement('div');
+  currentGroup.className = 'trace-group';
+  const head = document.createElement('div');
+  head.className = 'trace-head';
+  head.innerHTML = '<div class="trace-no"></div><div class="trace-prompt"></div>';
+  head.querySelector('.trace-no').textContent = '回合 ' + String(turnNo).padStart(2, '0');
+  head.querySelector('.trace-prompt').textContent = prompt.length > 48 ? prompt.slice(0, 48) + '…' : prompt;
+  const spine = document.createElement('div');
+  spine.className = 'spine';
+  currentGroup.appendChild(head);
+  currentGroup.appendChild(spine);
+  railEl.appendChild(currentGroup);
+  scrollRail();
+  pendingNode = null;
+  textOpen = false;
+}
+
+function traceNode(label, status, tag) {
+  if (!currentGroup) return null;
+  const spine = currentGroup.querySelector('.spine');
+  const node = document.createElement('div');
+  node.className = 't-node ' + status;
+  node.innerHTML = '<span class="t-dot"></span><span class="t-label"></span>' + (tag ? '<span class="t-tag"></span>' : '');
+  node.querySelector('.t-label').textContent = label;
+  if (tag) node.querySelector('.t-tag').textContent = tag;
+  spine.appendChild(node);
+  scrollRail();
+  return node;
+}
+
+function parseSSE(raw) {
+  let event = 'message', data = '';
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim();
+    else if (line.startsWith('data:')) data += line.slice(5).trim();
+  }
+  let obj = {};
+  try { obj = JSON.parse(data || '{}'); } catch(e) { obj = { raw: data }; }
+  return { event, data: obj };
+}
+
+function handleEvent(event, data) {
+  switch (event) {
+    case 'text':
+      removeTyping();
+      appendText(data.text || '');
+      break;
+    case 'tool_use':
+      finalizeBot();
+      addToolCard(data.name, data.input);
+      pendingNode = traceNode(shortToolName(data.name), 'pending', '运行中');
+      break;
+    case 'tool_result':
+      finalizeBot();
+      addResultCard(data.text || '', data.is_error);
+      if (pendingNode) {
+        pendingNode.className = 't-node ' + (data.is_error ? 'err' : 'ok');
+        const tag = pendingNode.querySelector('.t-tag');
+        if (tag) tag.textContent = data.is_error ? '失败' : '完成';
+        pendingNode = null;
+      }
+      break;
+    case 'done':
+      finalizeBot();
+      if (pendingNode) { pendingNode.className = 't-node ok'; pendingNode = null; }
+      break;
+    case 'error':
+      finalizeBot();
+      addErrorBar(data.message || '未知错误');
+      if (pendingNode) { pendingNode.className = 't-node err'; pendingNode = null; }
+      break;
+  }
+}
+
+async function send(prompt) {
+  busy = true;
+  sendBtn.disabled = true;
+  inputEl.value = '';
+  autoGrow();
+  addUser(prompt);
+  startTurn(prompt);
+  addTyping();
+  try {
+    const resp = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      addErrorBar(err.error || ('HTTP ' + resp.status));
+      return;
+    }
+    removeTyping();
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const raw = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const { event, data } = parseSSE(raw);
+        handleEvent(event, data);
+      }
+    }
+  } catch (e) {
+    addErrorBar(String(e));
+  } finally {
+    finalizeBot();
+    busy = false;
+    sendBtn.disabled = false;
+    inputEl.focus();
+  }
+}
+
+sendBtn.addEventListener('click', (e) => { e.preventDefault(); submit(); });
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+});
+function submit() {
+  const prompt = inputEl.value.trim();
+  if (!prompt || busy) return;
+  send(prompt);
+}
+document.querySelectorAll('.hint').forEach(h => {
+  h.addEventListener('click', () => { if (busy) return; inputEl.value = h.dataset.prompt; submit(); });
+});
+
+clearBtn.addEventListener('click', () => {
+  if (busy) return;
+  messagesEl.innerHTML = '';
+  railEl.innerHTML = '';
+  turnNo = 0; currentGroup = null; pendingNode = null; currentBot = null;
+  inputEl.focus();
+});
+
+function autoGrow() {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+}
+inputEl.addEventListener('input', autoGrow);
+inputEl.focus();
+</script>
+</body>
+</html>
