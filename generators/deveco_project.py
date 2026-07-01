@@ -228,7 +228,7 @@ def _safe_project_slug(project_name: str) -> str:
     非 [A-Za-z0-9_-] 替换为 _，若结果为空或含路径分隔/.. 则 fallback 为 "game"。
     用于输出路径前缀与 oh-package name。
     """
-    slug = re.sub(r"[^A-Za-z0-9_-]", "_", project_name)
+    slug = re.sub(r"[^A-Za-z0-9_-]", "_", project_name).lower()
     if not slug or slug == ".." or "/" in slug or "\\" in slug:
         return "game"
     return slug
