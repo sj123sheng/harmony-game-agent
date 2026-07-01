@@ -75,24 +75,238 @@ def _import_specifier(subsystem: str, filename: str) -> str:
     return f"../game/{subsystem}/{stem}"
 
 
-# ---------- 脚手架骨架（Phase 2 后续任务逐步填充） ----------
+# ---------- DevEco 模板（确定性，__ARG__ 占位） ----------
 
-def _sanitize_bundle(bundle: dict) -> dict:
-    """清洗 LLM 返回的工程配置 bundle（占位，后续任务实现）。"""
-    return bundle
+_APP_JSON5 = """{
+  "app": {
+    "bundleName": "__ARG:bundle__",
+    "vendor": "harmony-game-agent",
+    "versionCode": 1,
+    "versionName": "1.0.0",
+    "icon": "$media:app_icon",
+    "label": "__ARG:label__"
+  }
+}
+"""
+
+_MODULE_JSON5 = """{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    "deviceTypes": ["phone", "tablet"],
+    "deliveryInstallOption": { "deliveryType": "installWithRequest" },
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:app_icon",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:app_icon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        "skills": [
+          { "entities": ["entity.system.home"], "actions": ["action.system.home"] }
+        ]
+      }
+    ]
+  }
+}
+"""
+
+_ENTRY_ABILITY_ETS = """import UIAbility from '@ohos.app.ability.UIAbility';
+import window from '@ohos.window';
+
+export default class EntryAbility extends UIAbility {
+  onWindowStageCreate(windowStage: window.WindowStage): void {
+    windowStage.loadContent('pages/Index', (err) => {
+      if (err.code) {
+        console.error('Failed to load content. cause: ' + JSON.stringify(err));
+        return;
+      }
+      console.info('Succeeded in loading content.');
+    });
+  }
+}
+"""
+
+_INDEX_ETS = """// 战斗循环 demo - __ARG:label__
+// 由 scaffold_deveco_project 生成，LLM 填充战斗逻辑。
+@Entry
+@Component
+struct Index {
+  __LLM:demo_body__
+}
+"""
+
+_STRING_JSON_BASE = """{
+  "string": [
+    { "name": "module_desc", "value": "module description" },
+    { "name": "EntryAbility_desc", "value": "entry ability" },
+    { "name": "EntryAbility_label", "value": "__ARG:label__" },
+    { "name": "app_name", "value": "__ARG:label__" }
+  ]
+}
+"""
+
+_STRING_JSON_EN = """{
+  "string": [
+    { "name": "module_desc", "value": "module description" },
+    { "name": "EntryAbility_desc", "value": "entry ability" },
+    { "name": "EntryAbility_label", "value": "__ARG:label__" },
+    { "name": "app_name", "value": "__ARG:label__" }
+  ]
+}
+"""
+
+_STRING_JSON_ZH = """{
+  "string": [
+    { "name": "module_desc", "value": "模块描述" },
+    { "name": "EntryAbility_desc", "value": "入口能力" },
+    { "name": "EntryAbility_label", "value": "__ARG:label__" },
+    { "name": "app_name", "value": "__ARG:label__" }
+  ]
+}
+"""
+
+_COLOR_JSON = """{
+  "color": [
+    { "name": "start_window_background", "value": "#FFFFFF" }
+  ]
+}
+"""
+
+_FLOAT_JSON = """{
+  "float": [
+    { "name": "title_font_size", "value": "24fp" }
+  ]
+}
+"""
+
+_MAIN_PAGES_JSON = """{
+  "src": [
+    "src/main/ets/pages/Index.ets"
+  ]
+}
+"""
+
+_ENTRY_BUILD_PROFILE = """{
+  "apiType": "stageMode",
+  "buildOption": {},
+  "targets": [
+    { "name": "default", "runtimeOS": "harmonyos" }
+  ]
+}
+"""
+
+_HVIGORFILE_TS = """import { appTasks } from '@ohos/hvigor-ohos';
+export default {
+  system: appTasks,
+}
+"""
+
+_ROOT_BUILD_PROFILE = """{
+  "app": { "signingConfigs": [], "products": [{ "name": "default", "signingConfig": "default" }] },
+  "modules": [{ "name": "entry", "srcPath": "./entry", "targets": [{ "name": "default", "applyToProducts": ["default"] }] }]
+}
+"""
+
+_OH_PACKAGE_JSON5 = """{
+  "name": "__ARG:project_name__",
+  "version": "1.0.0",
+  "description": "harmony-game-agent 生成的 RPG demo 工程",
+  "main": "",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@ohos/hypium": "1.0.6"
+  }
+}
+"""
+
+# ---------- sanitize ----------
+
+def _sanitize_bundle(project_name: str, bundle_prefix: str) -> tuple[str, str]:
+    """bundleName = <bundle_prefix>.<sanitized>；label 保留原展示名。"""
+    sanitized = re.sub(r"[^a-z0-9_]", "_", project_name.lower())
+    sanitized = re.sub(r"_+", "_", sanitized)  # 坍缩连续下划线
+    # 避免开头数字
+    if sanitized and sanitized[0].isdigit():
+        sanitized = "_" + sanitized
+    bundle = f"{bundle_prefix}.{sanitized}"
+    return bundle, project_name
 
 
-def build_deveco_project_spec(
-    subsystems: list[Subsystem],
-    bundle: dict,
-) -> GeneratorSpec:
-    """构建 DevEco 工程脚手架的 GeneratorSpec（占位，后续任务实现）。"""
+# ---------- spec 构造 ----------
+
+def _import_lines(subsystems: list[Subsystem]) -> str:
+    """构造给 LLM 的可用 import 清单文本。"""
+    if not subsystems:
+        return "（无可用子系统）"
+    lines = []
+    for sub in subsystems:
+        for f in sub.files:
+            if not f.exports:
+                continue
+            spec = _import_specifier(sub.name, os.path.basename(f.dst))
+            syms = ", ".join(f.exports)
+            lines.append(f"- 从 '{spec}' 可导入：{syms}")
+    return "\n".join(lines)
+
+
+def build_deveco_project_spec(subsystems: list[Subsystem]) -> GeneratorSpec:
+    """构造 DevEco 工程的 GeneratorSpec。路径相对工程根（不含 project_name 前缀，由工具层拼接）。"""
+    imports = _import_lines(subsystems)
+    if subsystems:
+        instruction = (
+            "为一个鸿蒙 ArkTS 战斗循环入口页填充 demo_body。可用 import：\n"
+            f"{imports}\n\n"
+            "要求：在 struct Index 内声明状态字段并实例化已导入的角色/敌人/技能/背包；"
+            "build() 返回一个战斗循环 UI——攻击按钮触发战斗结算并刷新血量；技能冷却与释放；"
+            "多敌人轮换；回合与即时两种模式切换；血量/属性面板刷新。"
+            "约束：只用上面列出的 import，不臆造不存在的符号；不要重复 @Entry/@Component/struct 声明，"
+            "只填 demo_body 占位符位置（含状态字段、build 方法体等 struct 内部全部内容）。"
+        )
+    else:
+        instruction = (
+            "无可用子系统。demo_body 填：声明一个空状态，build() 返回一个 Column 含 "
+            "Text('请先生成子系统后再脚手架工程') 的简单场景。不要重复 struct 声明。"
+        )
+
     return GeneratorSpec(
-        name="deveco_project",
-        description="占位",
-        input_schema={},
-        files=[],
-        fill_instruction="占位",
+        name="scaffold_deveco_project",
+        description=(
+            "扫描 ./generated/ 下已有 RPG 子系统文件，组装成完整鸿蒙 stage 模型工程，"
+            "并生成接入全部子系统的战斗循环 demo 入口页。"
+            "参数：project_name 工程名；bundle_prefix 可选默认 com.harmonygame；"
+            "scan_dir 可选默认 ./generated。"
+        ),
+        input_schema={
+            "project_name": str,
+            "bundle_prefix": str,
+            "scan_dir": str,
+        },
+        files=[
+            FileSpec("AppScope/app.json5", _APP_JSON5),
+            FileSpec("entry/src/main/module.json5", _MODULE_JSON5),
+            FileSpec("entry/src/main/ets/entryability/EntryAbility.ets", _ENTRY_ABILITY_ETS),
+            FileSpec("entry/src/main/ets/pages/Index.ets", _INDEX_ETS, fill_targets=["demo_body"]),
+            FileSpec("entry/src/main/resources/base/element/string.json", _STRING_JSON_BASE),
+            FileSpec("entry/src/main/resources/base/element/color.json", _COLOR_JSON),
+            FileSpec("entry/src/main/resources/base/element/float.json", _FLOAT_JSON),
+            FileSpec("entry/src/main/resources/base/profile/main_pages.json", _MAIN_PAGES_JSON),
+            FileSpec("entry/src/main/resources/en_US/element/string.json", _STRING_JSON_EN),
+            FileSpec("entry/src/main/resources/zh_CN/element/string.json", _STRING_JSON_ZH),
+            FileSpec("entry/build-profile.json5", _ENTRY_BUILD_PROFILE),
+            FileSpec("entry/hvigorfile.ts", _HVIGORFILE_TS),
+            FileSpec("build-profile.json5", _ROOT_BUILD_PROFILE),
+            FileSpec("hvigorfile.ts", _HVIGORFILE_TS),
+            FileSpec("oh-package.json5", _OH_PACKAGE_JSON5),
+        ],
+        fill_instruction=instruction,
+        max_tokens=4096,
     )
 
 

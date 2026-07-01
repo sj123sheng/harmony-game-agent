@@ -93,6 +93,98 @@ def test_import_specifier_from_pages_to_game():
     print("[OK] test_import_specifier_from_pages_to_game")
 
 
+# ---------- sanitize ----------
+
+def test_sanitize_bundle_basic():
+    bundle, label = _sanitize_bundle("rpgdemo", "com.harmonygame")
+    assert bundle == "com.harmonygame.rpgdemo"
+    assert label == "rpgdemo"
+    print("[OK] test_sanitize_bundle_basic")
+
+
+def test_sanitize_bundle_normalizes_illegal():
+    bundle, label = _sanitize_bundle("我的 RPG Demo", "com.harmonygame")
+    assert bundle == "com.harmonygame._rpg_demo", bundle
+    assert label == "我的 RPG Demo"  # label 保留原展示名
+    print("[OK] test_sanitize_bundle_normalizes_illegal")
+
+
+def test_sanitize_bundle_custom_prefix():
+    bundle, _ = _sanitize_bundle("demo", "com.example")
+    assert bundle == "com.example.demo"
+    print("[OK] test_sanitize_bundle_custom_prefix")
+
+
+# ---------- spec 构造 ----------
+
+def _fake_subsystems():
+    """造一份扫描结果用于 spec 测试。"""
+    return [
+        Subsystem(name="character", files=[
+            SubsystemFile("a/CharacterStats.ets", "entry/src/main/ets/game/character/CharacterStats.ets",
+                          ["CharacterStats"], "export struct CharacterStats {}"),
+            SubsystemFile("a/StatsPanel.ets", "entry/src/main/ets/game/character/StatsPanel.ets",
+                          ["StatsPanel"], "export struct StatsPanel {}"),
+        ]),
+        Subsystem(name="skill", files=[
+            SubsystemFile("a/Skill.ets", "entry/src/main/ets/game/skill/Skill.ets",
+                          ["Skill"], "export struct Skill {}"),
+        ]),
+    ]
+
+
+def test_build_spec_has_all_deterministic_files():
+    subs = _fake_subsystems()
+    spec = build_deveco_project_spec(subs)
+    paths = [f.path for f in spec.files]
+    expected = [
+        "AppScope/app.json5",
+        "entry/src/main/module.json5",
+        "entry/src/main/ets/entryability/EntryAbility.ets",
+        "entry/src/main/ets/pages/Index.ets",
+        "entry/src/main/resources/base/element/string.json",
+        "entry/src/main/resources/base/element/color.json",
+        "entry/src/main/resources/base/element/float.json",
+        "entry/src/main/resources/base/profile/main_pages.json",
+        "entry/src/main/resources/en_US/element/string.json",
+        "entry/src/main/resources/zh_CN/element/string.json",
+        "entry/build-profile.json5",
+        "entry/hvigorfile.ts",
+        "build-profile.json5",
+        "hvigorfile.ts",
+        "oh-package.json5",
+    ]
+    assert paths == expected, paths
+    print("[OK] test_build_spec_has_all_deterministic_files")
+
+
+def test_build_spec_index_ets_has_llm_slot():
+    spec = build_deveco_project_spec(_fake_subsystems())
+    index = next(f for f in spec.files if f.path == "entry/src/main/ets/pages/Index.ets")
+    assert "__LLM:demo_body__" in index.template
+    assert "demo_body" in index.fill_targets
+    print("[OK] test_build_spec_index_ets_has_llm_slot")
+
+
+def test_build_spec_fill_instruction_lists_imports():
+    spec = build_deveco_project_spec(_fake_subsystems())
+    fi = spec.fill_instruction
+    # 列出每个文件的 import 路径与导出符号
+    assert "../game/character/CharacterStats" in fi
+    assert "CharacterStats" in fi
+    assert "../game/skill/Skill" in fi
+    assert "Skill" in fi
+    # 含战斗循环要求关键词
+    assert "战斗循环" in fi
+    print("[OK] test_build_spec_fill_instruction_lists_imports")
+
+
+def test_build_spec_fill_instruction_empty_when_no_subsystems():
+    spec = build_deveco_project_spec([])
+    assert "请先生成子系统" in spec.fill_instruction or "空场景" in spec.fill_instruction
+    print("[OK] test_build_spec_fill_instruction_empty_when_no_subsystems")
+
+
 def main():
     test_extract_exports_struct_class_const_enum()
     test_extract_exports_empty_when_none()
@@ -100,7 +192,14 @@ def main():
     test_scan_subsystems_empty_dir_returns_empty()
     test_scan_subsystems_skips_non_ets_files()
     test_import_specifier_from_pages_to_game()
-    print("\nTask 1 全部通过。")
+    test_sanitize_bundle_basic()
+    test_sanitize_bundle_normalizes_illegal()
+    test_sanitize_bundle_custom_prefix()
+    test_build_spec_has_all_deterministic_files()
+    test_build_spec_index_ets_has_llm_slot()
+    test_build_spec_fill_instruction_lists_imports()
+    test_build_spec_fill_instruction_empty_when_no_subsystems()
+    print("\n全部通过。")
 
 
 if __name__ == "__main__":
