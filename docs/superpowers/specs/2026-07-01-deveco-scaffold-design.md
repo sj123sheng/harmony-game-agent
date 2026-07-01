@@ -154,27 +154,23 @@ async def scaffold_deveco_project(args):
 
 ### Index.ets 的 LLM 填充
 
+Index.ets 采用确定性 import + LLM 填 struct 体的混合方式（最终审查调整）：
+- 顶层 `__ARG:imports__`：由工具根据扫描出的子系统导出符号确定性生成 `import { Sym } from '../game/<sub>/<stem>';` 语句块，避免 LLM 把 import 塞进 struct 导致语法错误
+- struct 内 `__LLM:demo_body__`：LLM 只填状态字段与 build() 战斗循环体，不输出 import
+
 ```python
-LlmFill(
-    file="entry/src/main/ets/pages/Index.ets",
-    instruction=(
-      "基于以下子系统清单，写一个完整战斗循环的 ArkTS 入口页：\n"
-      "- 可用 import：{扫描出的路径+导出符号清单}\n"
-      "- 要求：实例化角色/敌人/技能/背包；攻击按钮触发战斗结算；"
-      "技能冷却与释放；多敌人轮换；回合与即时两种模式切换；血量/属性面板刷新。\n"
-      "- 无子系统时输出空场景 + '请先生成子系统' 提示文本。\n"
-      "- 约束：只用提供的 import，不臆造不存在的符号。"
-    ),
-    skeleton="""@Entry
+# 模板结构
+"""
+__ARG:imports__
+@Entry
 @Component
 struct Index {
-  // __LLM: 状态字段与实例化
-  build() {
-    // __LLM: 战斗循环 UI
-  }
-}"""
-)
+  __LLM:demo_body__
+}
+"""
 ```
+
+填充指令：列出可用符号供 LLM 知道能实例化什么，但明确"import 已在顶部生成，只填 struct 内部，不要输出 import 语句"。要求：实例化角色/敌人/技能/背包；攻击按钮触发战斗结算；技能冷却与释放；多敌人轮换；回合与即时切换；血量/属性面板刷新。无子系统时 demo_body 填空场景 + 提示文本。
 
 ### bundleName sanitize
 
@@ -189,7 +185,7 @@ struct Index {
 | `entry/src/main/ets/entryability/EntryAbility.ets` | 工程名 |
 | `…/base/element/string.json` | 工程名展示 |
 | `…/base/element/color.json` `…/float.json` | 固定色值/字号 |
-| `…/base/profile/main_pages.json` | `"src/main/ets/pages/Index.ets"` |
+| `…/base/profile/main_pages.json` | `"pages/Index"`（stage 模型路由名，与 EntryAbility 的 `loadContent('pages/Index')` 对应） |
 | `…/en_US/element/string.json` `…/zh_CN/element/string.json` | 多语言 |
 | `…/base/media/icon.png` | 占位最小 PNG |
 | `entry/build-profile.json5` `entry/hvigorfile.ts` | 固定 |
