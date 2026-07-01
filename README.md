@@ -4,12 +4,13 @@
 
 ## 功能
 
-交互式多轮对话 Agent，挂载 5 个自定义工具（in-process MCP 工具）：
+交互式多轮对话 Agent，挂载 6 个自定义工具（in-process MCP 工具）：
 
 - **generate_character_stats** — 生成角色属性系统（基础属性 / 经验等级 / 升级成长 / 属性面板 UI）
 - **generate_skill_system** — 生成技能与 Buff 系统（技能定义 / Buff / 技能管理器）
 - **generate_inventory** — 生成背包与装备系统（物品 / 背包 / 装备槽 / 背包 UI）
 - **generate_enemy_ai** — 生成敌人与战斗 AI（敌人属性 / AI 状态机 / 战斗结算器）
+- **scaffold_deveco_project** — 脚手架 DevEco Studio 工程（扫描子系统、组装项目骨架、LLM 填充战斗循环 demo）
 - **review_arkts_code** — 用 LLM 智能审查 ArkTS 代码（固定 checklist）
 
 前四个生成工具采用**混合生成**：确定性模板骨架 + 一次 LLM 调用填充定制细节，输出多文件 `.ets` 到 `./generated/<子系统>/`。共享框架 `generators/framework.py` 统一处理渲染、LLM 填充、回填与降级（LLM 失败时占位符标 `// TODO`，不崩溃）。
@@ -49,6 +50,7 @@ uv run python server.py
 你> 生成一个 20 格背包，装备槽含武器
 你> 生成一个 Boss 敌人，困难难度
 你> 审查这段 ArkTS 代码：<粘贴代码>
+你> 脚手架一个叫 rpgdemo 的 DevEco 工程，把已生成的子系统组装进去
 你> exit
 ```
 
@@ -68,12 +70,13 @@ uv run python generators/framework_test.py
 |------|------|
 | `main.py` | env 配置、`ClaudeAgentOptions` 装配、REPL 主循环 |
 | `server.py` | 网页版后端（Starlette + SSE），复用 main 的装配 |
-| `tools.py` | 5 个 `@tool` 工具定义 + `create_sdk_mcp_server` 装配 |
+| `tools.py` | 6 个 `@tool` 工具定义 + `create_sdk_mcp_server` 装配 |
 | `generators/framework.py` | 共享混合生成框架（渲染 + LLM 填充 + 回填 + 降级 + 重试） |
 | `generators/character_stats.py` | 角色属性系统生成器 |
 | `generators/skill_system.py` | 技能与 Buff 系统生成器 |
 | `generators/inventory.py` | 背包与装备生成器 |
 | `generators/enemy_ai.py` | 敌人与战斗 AI 生成器 |
+| `generators/deveco_project.py` | DevEco 工程脚手架（扫描子系统 + 组装模板 + LLM 填充 Index.ets） |
 | `generators/framework_test.py` | 框架单测 + 冒烟测试 |
 | `index.html` | 网页工作台前端 |
 | `.env.example` | 环境变量模板（API Key / 中转地址 / 模型） |
@@ -84,4 +87,5 @@ uv run python generators/framework_test.py
 - 工具是 in-process MCP 工具，跑在同一 Python 进程内，SDK 自动处理"调用→执行→返回结果→Claude 继续"的循环。
 - 生成工具返回 `{files: [{path, content}]}`，主 Agent 据此用 Write 写入 `./generated/`。
 - 中转网关偶发空响应时，框架最多重试 1 次。
+- DevEco 工程的 `app_icon.png` 为二进制媒体文件，主 Agent 的 Write 仅支持文本，需用户自行放入 `entry/src/main/resources/base/media/` 后再编译。
 - 后续可扩展：项目级多文件/工程脚手架、跨文件引用校验、日志分析与性能建议、Web 工作台文件树与导出。

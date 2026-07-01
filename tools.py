@@ -1,6 +1,6 @@
 """harmony-game-agent 自定义工具集。
 
-4 个 RPG 子系统生成工具（混合：确定性模板骨架 + LLM 填充）+ 1 个 ArkTS 代码审查工具。
+4 个 RPG 子系统生成工具（混合：确定性模板骨架 + LLM 填充）+ 1 个 DevEco 脚手架工具 + 1 个 ArkTS 代码审查工具。
 生成工具通过共享 framework.hybrid_generate 统一渲染/填充/组装多文件，返回 {files} 给主 Agent 写盘。
 """
 
