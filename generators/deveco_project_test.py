@@ -15,7 +15,10 @@ from generators.deveco_project import (
     _scan_subsystems,
     _extract_exports,
     _sanitize_bundle,
+    _safe_project_slug,
+    _build_imports,
     _import_specifier,
+    _MAIN_PAGES_JSON,
     build_deveco_project_spec,
     run_scaffold,
 )
@@ -113,6 +116,158 @@ def test_sanitize_bundle_custom_prefix():
     bundle, _ = _sanitize_bundle("demo", "com.example")
     assert bundle == "com.example.demo"
     print("[OK] test_sanitize_bundle_custom_prefix")
+
+
+# ---------- safe_project_slug (C1) ----------
+
+def test_safe_project_slug_basic():
+    assert _safe_project_slug("rpgdemo") == "rpgdemo"
+    print("[OK] test_safe_project_slug_basic")
+
+
+def test_safe_project_slug_empty_falls_back_to_game():
+    assert _safe_project_slug("") == "game"
+    print("[OK] test_safe_project_slug_empty_falls_back_to_game")
+
+
+def test_safe_project_slug_path_traversal_sanitized():
+    slug = _safe_project_slug("../../x")
+    # 不得含路径分隔符或 ..
+    assert "/" not in slug
+    assert "\\" not in slug
+    assert ".." not in slug
+    # 应是单一安全段
+    assert all(c.isalnum() or c in "_-" for c in slug)
+    print(f"[OK] test_safe_project_slug_path_traversal_sanitized (slug={slug!r})")
+
+
+def test_safe_project_slug_chinese_replaced():
+    slug = _safe_project_slug("我的游戏")
+    assert "/" not in slug
+    assert ".." not in slug
+    assert all(c.isalnum() or c in "_-" for c in slug)
+    print(f"[OK] test_safe_project_slug_chinese_replaced (slug={slug!r})")
+
+
+def test_run_scaffold_empty_project_name_safe_paths():
+    """空 project_name 时所有路径以 game/ 前缀，不逃逸到 ./generated/ 外。"""
+    with tempfile.TemporaryDirectory() as d:
+        orig, fake = _patch_fake(
+            '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "// demo"}}'
+        )
+        try:
+            result = asyncio.run(run_scaffold({
+                "project_name": "",
+                "scan_dir": d,
+            }))
+        finally:
+            import generators.framework as fw
+            fw.AsyncAnthropic = orig
+    for f in result["files"]:
+        assert f["path"].startswith("game/"), f["path"]
+        assert not f["path"].startswith("/"), f["path"]
+    print("[OK] test_run_scaffold_empty_project_name_safe_paths")
+
+
+# ---------- main_pages.json 路由格式 (C2) ----------
+
+def test_main_pages_json_uses_pages_index_format():
+    """模板应使用 pages/Index 而非 src/main/ets/pages/Index.ets。"""
+    assert "pages/Index" in _MAIN_PAGES_JSON
+    assert "src/main/ets/pages/Index.ets" not in _MAIN_PAGES_JSON
+    print("[OK] test_main_pages_json_uses_pages_index_format")
+
+
+def test_run_scaffold_main_pages_json_content():
+    """run_scaffold 输出的 main_pages.json 应含 pages/Index。"""
+    with tempfile.TemporaryDirectory() as d:
+        orig, fake = _patch_fake(
+            '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "// demo"}}'
+        )
+        try:
+            result = asyncio.run(run_scaffold({
+                "project_name": "rpgdemo",
+                "scan_dir": d,
+            }))
+        finally:
+            import generators.framework as fw
+            fw.AsyncAnthropic = orig
+    mp = next(f for f in result["files"]
+              if f["path"] == "rpgdemo/entry/src/main/resources/base/profile/main_pages.json")
+    assert "pages/Index" in mp["content"]
+    assert "src/main/ets/pages/Index.ets" not in mp["content"]
+    print("[OK] test_run_scaffold_main_pages_json_content")
+
+
+# ---------- sanitize bundle 边界 (I3) ----------
+
+def test_sanitize_bundle_pure_chinese_falls_back():
+    bundle, label = _sanitize_bundle("我的", "com.harmonygame")
+    assert bundle == "com.harmonygame.game", bundle
+    assert label == "我的"
+    print("[OK] test_sanitize_bundle_pure_chinese_falls_back")
+
+
+def test_sanitize_bundle_empty_string_falls_back():
+    bundle, label = _sanitize_bundle("", "com.harmonygame")
+    assert bundle == "com.harmonygame.game", bundle
+    assert label == ""
+    print("[OK] test_sanitize_bundle_empty_string_falls_back")
+
+
+# ---------- _build_imports & Index.ets 模板 (I2) ----------
+
+def test_build_imports_generates_correct_lines():
+    subs = _fake_subsystems()
+    imports = _build_imports(subs)
+    assert "import { CharacterStats } from '../game/character/CharacterStats';" in imports
+    assert "import { StatsPanel } from '../game/character/StatsPanel';" in imports
+    assert "import { Skill } from '../game/skill/Skill';" in imports
+    print("[OK] test_build_imports_generates_correct_lines")
+
+
+def test_build_imports_empty_when_no_subsystems():
+    assert _build_imports([]) == ""
+    print("[OK] test_build_imports_empty_when_no_subsystems")
+
+
+def test_index_ets_template_has_imports_placeholder():
+    spec = build_deveco_project_spec(_fake_subsystems())
+    index = next(f for f in spec.files if f.path == "entry/src/main/ets/pages/Index.ets")
+    assert "__ARG:imports__" in index.template
+    print("[OK] test_index_ets_template_has_imports_placeholder")
+
+
+def test_fill_instruction_says_only_fill_struct():
+    spec = build_deveco_project_spec(_fake_subsystems())
+    fi = spec.fill_instruction
+    assert "只填 struct" in fi or "不要输出 import" in fi, fi
+    print("[OK] test_fill_instruction_says_only_fill_struct")
+
+
+def test_run_scaffold_index_ets_has_imports_and_no_residuals():
+    """全流程：Index.ets 含确定性 import 语句，无占位符残留。"""
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "character").mkdir()
+        Path(d, "character", "CharacterStats.ets").write_text(
+            "export struct CharacterStats { @State hp: number = 100 }", encoding="utf-8")
+        orig, fake = _patch_fake(
+            '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "// demo filled"}}'
+        )
+        try:
+            result = asyncio.run(run_scaffold({
+                "project_name": "rpgdemo",
+                "scan_dir": d,
+            }))
+        finally:
+            import generators.framework as fw
+            fw.AsyncAnthropic = orig
+    idx = next(f for f in result["files"]
+               if f["path"] == "rpgdemo/entry/src/main/ets/pages/Index.ets")
+    assert "import { CharacterStats } from '../game/character/CharacterStats';" in idx["content"]
+    assert "__ARG:" not in idx["content"]
+    assert "__LLM:" not in idx["content"]
+    print("[OK] test_run_scaffold_index_ets_has_imports_and_no_residuals")
 
 
 # ---------- spec 构造 ----------
@@ -304,10 +459,30 @@ def main():
     test_sanitize_bundle_basic()
     test_sanitize_bundle_normalizes_illegal()
     test_sanitize_bundle_custom_prefix()
+    # C1
+    test_safe_project_slug_basic()
+    test_safe_project_slug_empty_falls_back_to_game()
+    test_safe_project_slug_path_traversal_sanitized()
+    test_safe_project_slug_chinese_replaced()
+    test_run_scaffold_empty_project_name_safe_paths()
+    # C2
+    test_main_pages_json_uses_pages_index_format()
+    test_run_scaffold_main_pages_json_content()
+    # I3
+    test_sanitize_bundle_pure_chinese_falls_back()
+    test_sanitize_bundle_empty_string_falls_back()
+    # I2
+    test_build_imports_generates_correct_lines()
+    test_build_imports_empty_when_no_subsystems()
+    test_index_ets_template_has_imports_placeholder()
+    test_fill_instruction_says_only_fill_struct()
+    test_run_scaffold_index_ets_has_imports_and_no_residuals()
+    # spec
     test_build_spec_has_all_deterministic_files()
     test_build_spec_index_ets_has_llm_slot()
     test_build_spec_fill_instruction_lists_imports()
     test_build_spec_fill_instruction_empty_when_no_subsystems()
+    # run_scaffold
     test_run_scaffold_copies_subsystem_files_with_project_prefix()
     test_run_scaffold_empty_scan_dir_still_produces_skeleton()
     test_run_scaffold_llm_failure_degrades_index()

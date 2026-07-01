@@ -20,6 +20,9 @@ from generators import (
     run_scaffold,
 )
 
+# M1: 模块级缓存，避免装饰器重复构造 spec
+_DEVECO_PROJECT_SPEC = build_deveco_project_spec([])
+
 
 def _format_files(result: dict) -> str:
     """把 hybrid_generate 的 {files,error} 格式化成可读文本，供主 Agent 据此 Write。"""
@@ -113,8 +116,8 @@ async def generate_enemy_ai(args):
 
 @tool(
     "scaffold_deveco_project",
-    build_deveco_project_spec([]).description,
-    build_deveco_project_spec([]).input_schema,
+    _DEVECO_PROJECT_SPEC.description,
+    _DEVECO_PROJECT_SPEC.input_schema,
 )
 async def scaffold_deveco_project(args):
     args = {

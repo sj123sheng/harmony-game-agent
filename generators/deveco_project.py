@@ -57,7 +57,8 @@ def _scan_subsystems(scan_dir: str) -> list[Subsystem]:
             if not fname.endswith(".ets"):
                 continue
             src = os.path.join(sub_dir, fname)
-            content = open(src, encoding="utf-8").read()
+            with open(src, encoding="utf-8") as f:
+                content = f.read()
             sub.files.append(SubsystemFile(
                 src=src,
                 dst=f"{_GAME_DIR}/{name}/{fname}",
@@ -134,6 +135,7 @@ export default class EntryAbility extends UIAbility {
 
 _INDEX_ETS = """// 战斗循环 demo - __ARG:label__
 // 由 scaffold_deveco_project 生成，LLM 填充战斗逻辑。
+__ARG:imports__
 @Entry
 @Component
 struct Index {
@@ -151,15 +153,7 @@ _STRING_JSON_BASE = """{
 }
 """
 
-_STRING_JSON_EN = """{
-  "string": [
-    { "name": "module_desc", "value": "module description" },
-    { "name": "EntryAbility_desc", "value": "entry ability" },
-    { "name": "EntryAbility_label", "value": "__ARG:label__" },
-    { "name": "app_name", "value": "__ARG:label__" }
-  ]
-}
-"""
+_STRING_JSON_EN = _STRING_JSON_BASE
 
 _STRING_JSON_ZH = """{
   "string": [
@@ -187,7 +181,7 @@ _FLOAT_JSON = """{
 
 _MAIN_PAGES_JSON = """{
   "src": [
-    "src/main/ets/pages/Index.ets"
+    "pages/Index"
   ]
 }
 """
@@ -226,15 +220,35 @@ _OH_PACKAGE_JSON5 = """{
 }
 """
 
-# ---------- sanitize ----------
+# ---------- safe slug (C1) ----------
+
+def _safe_project_slug(project_name: str) -> str:
+    """把 project_name 转成单一安全路径段。
+
+    非 [A-Za-z0-9_-] 替换为 _，若结果为空或含路径分隔/.. 则 fallback 为 "game"。
+    用于输出路径前缀与 oh-package name。
+    """
+    slug = re.sub(r"[^A-Za-z0-9_-]", "_", project_name)
+    if not slug or slug == ".." or "/" in slug or "\\" in slug:
+        return "game"
+    return slug
+
+
+# ---------- sanitize (I3) ----------
 
 def _sanitize_bundle(project_name: str, bundle_prefix: str) -> tuple[str, str]:
-    """bundleName = <bundle_prefix>.<sanitized>；label 保留原展示名。"""
+    """bundleName = <bundle_prefix>.<sanitized>；label 保留原展示名。
+
+    若 sanitized 不含任何 [a-z0-9]（纯中文/空字符串），fallback 为 "game"。
+    """
     sanitized = re.sub(r"[^a-z0-9_]", "_", project_name.lower())
     sanitized = re.sub(r"_+", "_", sanitized)  # 坍缩连续下划线
     # 避免开头数字
     if sanitized and sanitized[0].isdigit():
         sanitized = "_" + sanitized
+    # I3: 若 sanitized 不含任何字母数字或为空，fallback 为 "game"
+    if not sanitized or not re.search(r"[a-z0-9]", sanitized):
+        sanitized = "game"
     bundle = f"{bundle_prefix}.{sanitized}"
     return bundle, project_name
 
@@ -256,18 +270,37 @@ def _import_lines(subsystems: list[Subsystem]) -> str:
     return "\n".join(lines)
 
 
+def _build_imports(subsystems: list[Subsystem]) -> str:
+    """为 Index.ets 顶部生成确定性 import 语句块。
+
+    对每个子系统文件的每个 export 符号生成一行 import 语句。
+    无子系统时返回空串。
+    """
+    if not subsystems:
+        return ""
+    lines = []
+    for sub in subsystems:
+        for f in sub.files:
+            if not f.exports:
+                continue
+            spec = _import_specifier(sub.name, os.path.basename(f.dst))
+            syms = ", ".join(f.exports)
+            lines.append(f"import {{ {syms} }} from '{spec}';")
+    return "\n".join(lines)
+
+
 def build_deveco_project_spec(subsystems: list[Subsystem]) -> GeneratorSpec:
     """构造 DevEco 工程的 GeneratorSpec。路径相对工程根（不含 project_name 前缀，由工具层拼接）。"""
     imports = _import_lines(subsystems)
     if subsystems:
         instruction = (
-            "为一个鸿蒙 ArkTS 战斗循环入口页填充 demo_body。可用 import：\n"
+            "为一个鸿蒙 ArkTS 战斗循环入口页填充 demo_body。可用 import（已在顶部确定性生成）：\n"
             f"{imports}\n\n"
             "要求：在 struct Index 内声明状态字段并实例化已导入的角色/敌人/技能/背包；"
             "build() 返回一个战斗循环 UI——攻击按钮触发战斗结算并刷新血量；技能冷却与释放；"
             "多敌人轮换；回合与即时两种模式切换；血量/属性面板刷新。"
             "约束：只用上面列出的 import，不臆造不存在的符号；不要重复 @Entry/@Component/struct 声明，"
-            "只填 demo_body 占位符位置（含状态字段、build 方法体等 struct 内部全部内容）。"
+            "只填 struct Index 内部（状态字段、build 方法体等），不要输出 import 语句。"
         )
     else:
         instruction = (
@@ -316,25 +349,28 @@ async def run_scaffold(args: dict) -> dict:
     bundle_prefix = args.get("bundle_prefix") or "com.harmonygame"
     scan_dir = args.get("scan_dir") or "./generated"
 
+    # C1: 用安全 slug 拼输出路径前缀与 oh-package name；label 保留原始 project_name
+    slug = _safe_project_slug(project_name)
     bundle, label = _sanitize_bundle(project_name, bundle_prefix)
     subs = _scan_subsystems(scan_dir)
     spec = build_deveco_project_spec(subs)
 
     gen_args = {
-        "project_name": project_name,
+        "project_name": slug,       # I1: oh-package name 用安全 slug（小写合规）
         "bundle": bundle,
-        "label": label,
+        "label": label,             # label 保留原始 project_name 用于展示
+        "imports": _build_imports(subs),  # I2: 确定性 import 语句块
     }
     result = await hybrid_generate(spec, gen_args)
 
-    # 子系统搬运文件（带 project 前缀），前置拼到结果
+    # 子系统搬运文件（带 slug 前缀），前置拼到结果
     copied = [
-        {"path": f"{project_name}/{f.dst}", "content": f.content}
+        {"path": f"{slug}/{f.dst}", "content": f.content}
         for sub in subs for f in sub.files
     ]
-    # 给 hybrid_generate 产出的文件加 project 前缀
+    # 给 hybrid_generate 产出的文件加 slug 前缀
     prefixed = [
-        {"path": f"{project_name}/{f['path']}", "content": f["content"]}
+        {"path": f"{slug}/{f['path']}", "content": f["content"]}
         for f in result["files"]
     ]
     return {"files": copied + prefixed, "error": result.get("error", "")}
