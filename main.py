@@ -48,11 +48,14 @@ def build_options() -> ClaudeAgentOptions:
             "- generate_skill_system：生成技能与 Buff 系统（技能/Buff/技能管理器）\n"
             "- generate_inventory：生成背包与装备系统（物品/背包/装备/背包 UI）\n"
             "- generate_enemy_ai：生成敌人与战斗 AI（敌人/状态机/战斗结算）\n"
+            "- scaffold_deveco_project：扫描已生成的子系统文件，组装成完整 DevEco 工程，并生成战斗循环 demo 入口页\n"
             "- review_arkts_code：审查 ArkTS 代码并给出问题清单\n"
             "前四个工具会返回 {files: [{path, content}]}，每个文件含相对路径（如 character/CharacterStats.ets）"
             "与完整内容。当工具返回后，用 Write 工具把每个文件写入项目的 ./generated/ 目录，"
             "路径保持工具给出的相对路径（写入 ./generated/<子系统>/<文件>.ets），"
             "然后向用户说明生成了哪些文件、各自用途。\n"
+            "当用户要求生成工程/脚手架/可运行 demo 时，调用 scaffold_deveco_project；"
+            "它返回的文件路径带 <工程名>/ 前缀，用 Write 写入 ./generated/<工程名>/ 下对应路径。\n"
             "当用户要求审查代码时，调用 review_arkts_code。\n"
             "主动根据用户需求选择合适的工具，并结合工具返回结果给出说明。"
         ),
@@ -62,6 +65,7 @@ def build_options() -> ClaudeAgentOptions:
             "mcp__harmony_tools__generate_skill_system",
             "mcp__harmony_tools__generate_inventory",
             "mcp__harmony_tools__generate_enemy_ai",
+            "mcp__harmony_tools__scaffold_deveco_project",
             "mcp__harmony_tools__review_arkts_code",
             "Write",
         ],
@@ -114,7 +118,7 @@ async def repl() -> None:
     options = build_options()
     print("=== harmony-game-agent 交互式 REPL ===")
     print("可用工具：generate_character_stats / generate_skill_system / "
-          "generate_inventory / generate_enemy_ai / review_arkts_code")
+          "generate_inventory / generate_enemy_ai / scaffold_deveco_project / review_arkts_code")
     print("输入 exit 或 quit 退出。\n")
 
     async with ClaudeSDKClient(options=options) as client:

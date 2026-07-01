@@ -12,10 +12,12 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from generators import (
     build_character_stats_spec,
+    build_deveco_project_spec,
     build_enemy_ai_spec,
     build_inventory_spec,
     build_skill_system_spec,
     hybrid_generate,
+    run_scaffold,
 )
 
 
@@ -110,6 +112,24 @@ async def generate_enemy_ai(args):
 
 
 @tool(
+    "scaffold_deveco_project",
+    build_deveco_project_spec([]).description,
+    build_deveco_project_spec([]).input_schema,
+)
+async def scaffold_deveco_project(args):
+    args = {
+        "project_name": args["project_name"],
+        "bundle_prefix": args.get("bundle_prefix", "com.harmonygame"),
+        "scan_dir": args.get("scan_dir", "./generated"),
+    }
+    try:
+        result = await run_scaffold(args)
+    except Exception as e:
+        return {"content": [{"type": "text", "text": f"脚手架失败：{e}"}]}
+    return {"content": [{"type": "text", "text": _format_files(result)}]}
+
+
+@tool(
     "review_arkts_code",
     "用 LLM 对传入的 ArkTS 代码做智能审查，返回结构化的问题清单与改进建议。",
     {"code": str},
@@ -159,6 +179,7 @@ def build_server():
             generate_skill_system,
             generate_inventory,
             generate_enemy_ai,
+            scaffold_deveco_project,
             review_arkts_code,
         ],
     )
