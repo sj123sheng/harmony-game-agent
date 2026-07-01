@@ -185,6 +185,115 @@ def test_build_spec_fill_instruction_empty_when_no_subsystems():
     print("[OK] test_build_spec_fill_instruction_empty_when_no_subsystems")
 
 
+# ---------- run_scaffold 全流程 ----------
+
+def _fake_block(text: str):
+    return SimpleNamespace(text=text)
+
+
+class _FakeMessages:
+    def __init__(self, return_text: str):
+        self._return_text = return_text
+        self.calls = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(content=[_fake_block(self._return_text)])
+
+
+class _FakeAnthropic:
+    def __init__(self, return_text: str):
+        self.messages = _FakeMessages(return_text)
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+
+def _patch_fake(return_text: str):
+    import generators.framework as fw
+    fake = _FakeAnthropic(return_text)
+    orig = fw.AsyncAnthropic
+    fw.AsyncAnthropic = lambda *a, **k: fake
+    return orig, fake
+
+
+def test_run_scaffold_copies_subsystem_files_with_project_prefix():
+    # 造扫描目录
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "character").mkdir()
+        Path(d, "character", "CharacterStats.ets").write_text(
+            "export struct CharacterStats { @State hp: number = 100 }", encoding="utf-8")
+        # 桩 LLM：对 Index.ets 返回 demo_body 填充
+        orig, fake = _patch_fake(
+            '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "// demo filled"}}'
+        )
+        try:
+            result = asyncio.run(run_scaffold({
+                "project_name": "rpgdemo",
+                "scan_dir": d,
+            }))
+        finally:
+            import generators.framework as fw
+            fw.AsyncAnthropic = orig
+    paths = [f["path"] for f in result["files"]]
+    # 子系统文件在前，带 project 前缀与 game/ 路径
+    assert "rpgdemo/entry/src/main/ets/game/character/CharacterStats.ets" in paths, paths
+    # 搬运内容与源一致
+    moved = next(f for f in result["files"]
+                 if f["path"] == "rpgdemo/entry/src/main/ets/game/character/CharacterStats.ets")
+    assert "export struct CharacterStats { @State hp: number = 100 }" in moved["content"]
+    # 配置文件也带 project 前缀
+    assert "rpgdemo/AppScope/app.json5" in paths
+    assert "rpgdemo/entry/src/main/ets/pages/Index.ets" in paths
+    # app.json5 含 bundleName 替换
+    app = next(f for f in result["files"] if f["path"] == "rpgdemo/AppScope/app.json5")
+    assert "com.harmonygame.rpgdemo" in app["content"]
+    assert "__ARG:" not in app["content"]
+    # Index.ets 被填充
+    idx = next(f for f in result["files"] if f["path"] == "rpgdemo/entry/src/main/ets/pages/Index.ets")
+    assert "// demo filled" in idx["content"]
+    assert "__LLM:" not in idx["content"]
+    print("[OK] test_run_scaffold_copies_subsystem_files_with_project_prefix")
+
+
+def test_run_scaffold_empty_scan_dir_still_produces_skeleton():
+    with tempfile.TemporaryDirectory() as d:
+        orig, fake = _patch_fake(
+            '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "build() { Column(){Text(\"empty\")} }"}}'
+        )
+        try:
+            result = asyncio.run(run_scaffold({"project_name": "empty", "scan_dir": d}))
+        finally:
+            import generators.framework as fw
+            fw.AsyncAnthropic = orig
+    paths = [f["path"] for f in result["files"]]
+    assert "empty/AppScope/app.json5" in paths
+    assert not any("game/" in p for p in paths)  # 无子系统搬运
+    print("[OK] test_run_scaffold_empty_scan_dir_still_produces_skeleton")
+
+
+def test_run_scaffold_llm_failure_degrades_index():
+    with tempfile.TemporaryDirectory() as d:
+        # 桩 LLM 抛异常
+        import generators.framework as fw
+        class _Raising:
+            async def create(self, **k):
+                raise RuntimeError("余额不足")
+        raising = _Raising()
+        orig = fw.AsyncAnthropic
+        fw.AsyncAnthropic = lambda *a, **k: SimpleNamespace(messages=raising)
+        try:
+            result = asyncio.run(run_scaffold({"project_name": "rpgdemo", "scan_dir": d}))
+        finally:
+            fw.AsyncAnthropic = orig
+    idx = next(f for f in result["files"] if f["path"] == "rpgdemo/entry/src/main/ets/pages/Index.ets")
+    assert "// TODO: 待填充 demo_body" in idx["content"]
+    assert result["error"] != ""
+    # 其余配置文件仍产出
+    assert any(f["path"] == "rpgdemo/AppScope/app.json5" for f in result["files"])
+    print("[OK] test_run_scaffold_llm_failure_degrades_index")
+
+
 def main():
     test_extract_exports_struct_class_const_enum()
     test_extract_exports_empty_when_none()
@@ -199,6 +308,9 @@ def main():
     test_build_spec_index_ets_has_llm_slot()
     test_build_spec_fill_instruction_lists_imports()
     test_build_spec_fill_instruction_empty_when_no_subsystems()
+    test_run_scaffold_copies_subsystem_files_with_project_prefix()
+    test_run_scaffold_empty_scan_dir_still_produces_skeleton()
+    test_run_scaffold_llm_failure_degrades_index()
     print("\n全部通过。")
 
 

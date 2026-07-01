@@ -310,6 +310,31 @@ def build_deveco_project_spec(subsystems: list[Subsystem]) -> GeneratorSpec:
     )
 
 
-async def run_scaffold(scan_dir: str, bundle: dict) -> dict:
-    """一站式脚手架生成（占位，后续任务实现）。"""
-    return {"files": [], "error": ""}
+async def run_scaffold(args: dict) -> dict:
+    """脚手架主逻辑：扫描 → 构造 spec → hybrid_generate → 拼接子系统搬运文件 → 加 project 前缀。"""
+    project_name = args["project_name"]
+    bundle_prefix = args.get("bundle_prefix") or "com.harmonygame"
+    scan_dir = args.get("scan_dir") or "./generated"
+
+    bundle, label = _sanitize_bundle(project_name, bundle_prefix)
+    subs = _scan_subsystems(scan_dir)
+    spec = build_deveco_project_spec(subs)
+
+    gen_args = {
+        "project_name": project_name,
+        "bundle": bundle,
+        "label": label,
+    }
+    result = await hybrid_generate(spec, gen_args)
+
+    # 子系统搬运文件（带 project 前缀），前置拼到结果
+    copied = [
+        {"path": f"{project_name}/{f.dst}", "content": f.content}
+        for sub in subs for f in sub.files
+    ]
+    # 给 hybrid_generate 产出的文件加 project 前缀
+    prefixed = [
+        {"path": f"{project_name}/{f['path']}", "content": f["content"]}
+        for f in result["files"]
+    ]
+    return {"files": copied + prefixed, "error": result.get("error", "")}
