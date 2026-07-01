@@ -32,10 +32,13 @@ def _extract_ets_paths(logs: str) -> list[str]:
 
 
 def _truncate_logs(logs: str, limit_bytes: int = _LOGS_LIMIT) -> str:
-    """保留末尾 limit_bytes（堆栈通常在日志末尾）。"""
-    if len(logs) <= limit_bytes:
+    """保留末尾 limit_bytes 字节（堆栈通常在日志末尾）。
+    按 UTF-8 字节计账，切片时 errors="ignore" 避免切坏多字节字符。
+    """
+    encoded = logs.encode("utf-8")
+    if len(encoded) <= limit_bytes:
         return logs
-    return logs[-limit_bytes:]
+    return encoded[-limit_bytes:].decode("utf-8", errors="ignore")
 
 
 async def analyze_runtime_logs(args: dict) -> str:

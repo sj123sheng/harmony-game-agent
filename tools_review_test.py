@@ -72,9 +72,41 @@ def test_review_failure_returns_friendly_text():
     print("[OK] test_review_failure_returns_friendly_text")
 
 
+def test_tool_input_schema_optional_vs_required():
+    """断言 4 个分析工具的 input_schema 把可选参数暴露为可选、必填参数暴露为必填。
+    透传 JSON schema dict（含 type/properties/required）时 SDK 直接透传，
+    不会把所有字段塞进 required。
+    """
+    # analyze_runtime_logs: logs 必填，scope 可选
+    schema = tools.analyze_runtime_logs_tool.input_schema
+    assert schema["required"] == ["logs"], schema["required"]
+    assert "scope" in schema["properties"]
+    assert "scope" not in schema["required"]
+
+    # suggest_performance_fixes: scope 必填，symptom 可选
+    schema = tools.suggest_performance_fixes_tool.input_schema
+    assert schema["required"] == ["scope"], schema["required"]
+    assert "symptom" in schema["properties"]
+    assert "symptom" not in schema["required"]
+
+    # check_api_usage: scope 必填，focus_apis 可选
+    schema = tools.check_api_usage_tool.input_schema
+    assert schema["required"] == ["scope"], schema["required"]
+    assert "focus_apis" in schema["properties"]
+    assert "focus_apis" not in schema["required"]
+
+    # locate_bug: scope + symptom 都必填
+    schema = tools.locate_bug_tool.input_schema
+    assert schema["required"] == ["scope", "symptom"], schema["required"]
+    assert "symptom" in schema["properties"]
+
+    print("[OK] test_tool_input_schema_optional_vs_required")
+
+
 def main():
     test_review_returns_text_and_uses_framework()
     test_review_failure_returns_friendly_text()
+    test_tool_input_schema_optional_vs_required()
     print("\n全部通过。")
 
 

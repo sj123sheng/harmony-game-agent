@@ -171,7 +171,14 @@ async def review_arkts_code(args):
     "analyze_runtime_logs",
     "分析鸿蒙运行日志（含 ArkTS 堆栈），把报错路径映射到源码并给根因假设与修复方向。"
     "参数：logs 日志全文；scope 可选（文件路径/子系统名/'all'，默认 'all'）。",
-    {"logs": str, "scope": str},
+    {
+        "type": "object",
+        "properties": {
+            "logs": {"type": "string"},
+            "scope": {"type": "string", "default": "all"},
+        },
+        "required": ["logs"],
+    },
 )
 async def analyze_runtime_logs_tool(args):
     try:
@@ -188,7 +195,14 @@ async def analyze_runtime_logs_tool(args):
     "suggest_performance_fixes",
     "对已有 ArkTS 代码做性能审查，给出瓶颈清单与改法。"
     "参数：scope（文件路径/子系统名/'all'）；symptom 可选（如'列表卡顿'）。",
-    {"scope": str, "symptom": str},
+    {
+        "type": "object",
+        "properties": {
+            "scope": {"type": "string"},
+            "symptom": {"type": "string"},
+        },
+        "required": ["scope"],
+    },
 )
 async def suggest_performance_fixes_tool(args):
     try:
@@ -205,7 +219,14 @@ async def suggest_performance_fixes_tool(args):
     "locate_bug",
     "根据症状在已有 ArkTS 代码中跨文件推理定位可疑位置，给复现步骤与修复方向。"
     "参数：scope（文件路径/子系统名/'all'）；symptom 必填（症状/报错描述）。",
-    {"scope": str, "symptom": str},
+    {
+        "type": "object",
+        "properties": {
+            "scope": {"type": "string"},
+            "symptom": {"type": "string"},
+        },
+        "required": ["scope", "symptom"],
+    },
 )
 async def locate_bug_tool(args):
     try:
@@ -222,7 +243,14 @@ async def locate_bug_tool(args):
     "check_api_usage",
     "检查 ArkTS/ArkUI API 用法（误用/废弃/V1-V2 混用/权限缺失）。"
     "参数：scope（文件路径/子系统名/'all'）；focus_apis 可选（如'@State Navigation'）。",
-    {"scope": str, "focus_apis": str},
+    {
+        "type": "object",
+        "properties": {
+            "scope": {"type": "string"},
+            "focus_apis": {"type": "string"},
+        },
+        "required": ["scope"],
+    },
 )
 async def check_api_usage_tool(args):
     try:

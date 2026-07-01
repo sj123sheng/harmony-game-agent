@@ -80,14 +80,17 @@ def _build_user_message(user_input: str, files: list[FileRef]) -> str:
     total = 0
     for f in files:
         chunk = f.content
-        if total + len(chunk) > _FILES_BYTES_LIMIT:
+        chunk_bytes = chunk.encode("utf-8")
+        if total + len(chunk_bytes) > _FILES_BYTES_LIMIT:
             remaining = _FILES_BYTES_LIMIT - total
             if remaining > 0:
-                parts.append(f'<file path="{f.path}">{chunk[:remaining]}\n[已截断]</file>')
+                # 按字节切片再还原，errors="ignore" 避免切坏多字节字符尾部
+                truncated = chunk_bytes[:remaining].decode("utf-8", errors="ignore")
+                parts.append(f'<file path="{f.path}">{truncated}\n[已截断]</file>')
             total = _FILES_BYTES_LIMIT
             break
         parts.append(f'<file path="{f.path}">{chunk}</file>')
-        total += len(chunk)
+        total += len(chunk_bytes)
     parts.append("</files>")
     parts.append("")
     parts.append(user_input)
