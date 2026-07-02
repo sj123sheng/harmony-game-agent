@@ -601,10 +601,16 @@ function addFindingsCards(findings, isError) {
   if (!findings.length) {
     const div = document.createElement('div');
     div.className = 'msg bot';
-    div.innerHTML = '<div class="bubble"><p>✓ 无发现</p></div>';
+    div.innerHTML = `<div class="bubble"><p${isError ? ' style="color:var(--err)"' : ''}>${isError ? '⚠ 分析工具返回错误状态（无结果）' : '✓ 无发现'}</p></div>`;
     messagesEl.appendChild(div);
     scrollThread();
     return;
+  }
+  if (isError) {
+    const warn = document.createElement('div');
+    warn.className = 'msg bot';
+    warn.innerHTML = '<div class="bubble"><p>⚠ 分析工具返回错误状态（以下为部分结果）</p></div>';
+    messagesEl.appendChild(warn);
   }
   const sorted = [...findings].sort((a,b) => severityRank(a.severity) - severityRank(b.severity));
   for (const f of sorted) {
@@ -622,7 +628,11 @@ function addFindingsCards(findings, isError) {
       if (!val) return;
       const p = document.createElement('div');
       p.style.cssText = 'margin:4px 0;font-size:12.5px;';
-      p.innerHTML = `<b style="color:var(--muted);">${label}:</b> ${String(val)}`;
+      const b = document.createElement('b');
+      b.style.color = 'var(--muted)';
+      b.textContent = label + ':';
+      p.appendChild(b);
+      p.appendChild(document.createTextNode(' ' + String(val)));
       body.appendChild(p);
     };
     addRow('问题', f.summary);
