@@ -45,6 +45,7 @@ def _patch_fake(return_text: str = "api 报告"):
 def test_system_prompt_mentions_v1_v2():
     assert "V1" in _API_SYSTEM_PROMPT or "V2" in _API_SYSTEM_PROMPT
     assert "@ComponentV2" in _API_SYSTEM_PROMPT
+    assert "JSON 数组" in _API_SYSTEM_PROMPT
     print("[OK] test_system_prompt_mentions_v1_v2")
 
 

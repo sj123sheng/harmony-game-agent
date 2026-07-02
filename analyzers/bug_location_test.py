@@ -45,6 +45,7 @@ def _patch_fake(return_text: str = "bug 报告"):
 def test_system_prompt_covers_reasoning():
     assert "复现" in _BUG_SYSTEM_PROMPT
     assert "置信度" in _BUG_SYSTEM_PROMPT
+    assert "JSON 数组" in _BUG_SYSTEM_PROMPT
     print("[OK] test_system_prompt_covers_reasoning")
 
 

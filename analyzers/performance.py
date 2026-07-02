@@ -11,8 +11,10 @@ _PERF_SYSTEM_PROMPT = (
     "4. 图片资源：是否未用 PixelMap 解码缓存、是否在 build() 内重复解码\n"
     "5. 生命周期：事件监听/定时器/动画是否在 aboutToDispose 或 aboutToDisappear 释放\n"
     "6. 并发：是否有主线程阻塞的同步调用\n"
-    "请按『等级（高/中/低）| 位置 | 问题 | 改法』格式输出清单，按优先级排序。"
-    "若用户给了 symptom，优先围绕它分析。无问题则直接说明。"
+    "若用户给了 symptom，优先围绕它分析。\n"
+    "请输出一个 JSON 数组（不要 markdown 代码块标记、不要任何解释文字），"
+    "每个元素含字段：severity（高/中/低）、location（文件:行）、summary（一句话问题）、"
+    "fix（改法）。若无任何发现，返回 []。"
 )
 
 
