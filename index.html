@@ -566,7 +566,7 @@ function addFileCard(path, content, isError) {
   } else {
     // 导出链接
     const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
-    const exportDir = dir || '';
+    const exportDir = dir || '.';
     const links = document.createElement('div');
     links.style.cssText = 'margin:6px 0;font-family:var(--font-mono);font-size:11px;display:flex;gap:14px;';
     links.innerHTML =

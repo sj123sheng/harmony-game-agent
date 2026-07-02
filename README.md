@@ -4,7 +4,7 @@
 
 ## 功能
 
-交互式多轮对话 Agent，挂载 6 个自定义工具（in-process MCP 工具）：
+交互式多轮对话 Agent，挂载 10 个自定义工具（in-process MCP 工具）：
 
 - **generate_character_stats** — 生成角色属性系统（基础属性 / 经验等级 / 升级成长 / 属性面板 UI）
 - **generate_skill_system** — 生成技能与 Buff 系统（技能定义 / Buff / 技能管理器）
@@ -12,6 +12,10 @@
 - **generate_enemy_ai** — 生成敌人与战斗 AI（敌人属性 / AI 状态机 / 战斗结算器）
 - **scaffold_deveco_project** — 脚手架 DevEco Studio 工程（扫描子系统、组装项目骨架、LLM 填充战斗循环 demo）
 - **review_arkts_code** — 用 LLM 智能审查 ArkTS 代码（固定 checklist）
+- **analyze_runtime_logs** — 分析 HarmonyOS 运行日志（堆栈映射 / 错误分类 / 根因假设）
+- **suggest_performance_fixes** — ArkTS 性能审查（build 耗时操作 / 状态粒度 / 列表渲染等）
+- **locate_bug** — 跨文件推理定位可疑 Bug（复现步骤 / 验证手段 / 修复方向）
+- **check_api_usage** — ArkTS/ArkUI API 用法审查（误用 / 废弃 / V1V2 混用 / 权限）
 
 前四个生成工具采用**混合生成**：确定性模板骨架 + 一次 LLM 调用填充定制细节，输出多文件 `.ets` 到 `./generated/<子系统>/`。共享框架 `generators/framework.py` 统一处理渲染、LLM 填充、回填与降级（LLM 失败时占位符标 `// TODO`，不崩溃）。
 
@@ -70,7 +74,7 @@ uv run python generators/framework_test.py
 |------|------|
 | `main.py` | env 配置、`ClaudeAgentOptions` 装配、REPL 主循环 |
 | `server.py` | 网页版后端（Starlette + SSE），复用 main 的装配 |
-| `tools.py` | 6 个 `@tool` 工具定义 + `create_sdk_mcp_server` 装配 |
+| `tools.py` | 10 个 `@tool` 工具定义 + `create_sdk_mcp_server` 装配 |
 | `generators/framework.py` | 共享混合生成框架（渲染 + LLM 填充 + 回填 + 降级 + 重试） |
 | `generators/character_stats.py` | 角色属性系统生成器 |
 | `generators/skill_system.py` | 技能与 Buff 系统生成器 |
