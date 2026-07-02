@@ -57,6 +57,12 @@ def build_options() -> ClaudeAgentOptions:
             "当用户要求生成工程/脚手架/可运行 demo 时，调用 scaffold_deveco_project；"
             "它返回的文件路径带 <工程名>/ 前缀，用 Write 写入 ./generated/<工程名>/ 下对应路径。\n"
             "当用户要求审查代码时，调用 review_arkts_code。\n"
+            "当用户报运行日志/崩溃/报错时，调用 analyze_runtime_logs（logs 全文 + 可选 scope）。\n"
+            "当用户报性能问题/卡顿时，调用 suggest_performance_fixes（scope + 可选 symptom）。\n"
+            "当用户要定位 bug 时，调用 locate_bug（scope + 必填 symptom 症状描述）。\n"
+            "当用户怀疑 API 用错/废弃/V1-V2 混用时，调用 check_api_usage（scope + 可选 focus_apis）。\n"
+            "这四个分析工具的 scope 参数三形态：文件路径（如 character/X.ets）/子系统名（character/skill/inventory/enemy）/"
+            "'all' 全部子系统。分析工具返回纯文本报告，直接展示给用户，不写盘（区别于生成类工具返回 {files} 需 Write）。\n"
             "主动根据用户需求选择合适的工具，并结合工具返回结果给出说明。"
         ),
         mcp_servers={"harmony_tools": server},
@@ -67,6 +73,10 @@ def build_options() -> ClaudeAgentOptions:
             "mcp__harmony_tools__generate_enemy_ai",
             "mcp__harmony_tools__scaffold_deveco_project",
             "mcp__harmony_tools__review_arkts_code",
+            "mcp__harmony_tools__analyze_runtime_logs",
+            "mcp__harmony_tools__suggest_performance_fixes",
+            "mcp__harmony_tools__locate_bug",
+            "mcp__harmony_tools__check_api_usage",
             "Write",
         ],
         permission_mode="acceptEdits",
@@ -118,7 +128,9 @@ async def repl() -> None:
     options = build_options()
     print("=== harmony-game-agent 交互式 REPL ===")
     print("可用工具：generate_character_stats / generate_skill_system / "
-          "generate_inventory / generate_enemy_ai / scaffold_deveco_project / review_arkts_code")
+          "generate_inventory / generate_enemy_ai / scaffold_deveco_project / "
+          "review_arkts_code / analyze_runtime_logs / suggest_performance_fixes / "
+          "locate_bug / check_api_usage")
     print("输入 exit 或 quit 退出。\n")
 
     async with ClaudeSDKClient(options=options) as client:

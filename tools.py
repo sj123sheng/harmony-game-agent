@@ -1,15 +1,19 @@
 """harmony-game-agent 自定义工具集。
 
-4 个 RPG 子系统生成工具（混合：确定性模板骨架 + LLM 填充）+ 1 个 DevEco 脚手架工具 + 1 个 ArkTS 代码审查工具。
+4 个 RPG 子系统生成工具（混合：确定性模板骨架 + LLM 填充）+ 1 个 DevEco 脚手架工具 + 1 个 ArkTS 代码审查工具 + 4 个 ArkTS 分析工具。
 生成工具通过共享 framework.hybrid_generate 统一渲染/填充/组装多文件，返回 {files} 给主 Agent 写盘。
+审查/分析工具通过共享 analyzers.framework.analyze_with_context 统一走 LLM 调用，@tool 包装层兜底异常转 MCP 友好文本。
 """
-
-import os
-
-from anthropic import AsyncAnthropic
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from analyzers import (
+    analyze_runtime_logs,
+    check_api_usage,
+    locate_bug,
+    suggest_performance_fixes,
+)
+from analyzers.framework import FileRef, analyze_with_context
 from generators import (
     build_character_stats_spec,
     build_deveco_project_spec,
@@ -138,11 +142,6 @@ async def scaffold_deveco_project(args):
     {"code": str},
 )
 async def review_arkts_code(args):
-    # AsyncAnthropic 自动读取环境变量 ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL，
-    # 与主 Agent 共用同一套中转配置
-    client = AsyncAnthropic()
-    model = os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-5"
-
     # 固定的审查者 system prompt + checklist，保证每次审查流程一致、可复现
     system_prompt = (
         "你是一名资深 HarmonyOS ArkTS 代码审查专家。对用户给出的 ArkTS 代码进行审查，"
@@ -155,21 +154,113 @@ async def review_arkts_code(args):
         "请按『等级（高/中/低）| 位置 | 描述 | 建议』格式输出清单，最后给一句总体评价。"
         "若代码无问题，直接说明。"
     )
-
+    # A1 路径：把贴入代码包成 FileRef，走共享 analyze_with_context，
+    # 与其余 4 个分析工具共用 LLM 调用/截断/兜底逻辑。
+    files = [FileRef(path="<贴入代码>", content=args["code"])]
     try:
-        resp = await client.messages.create(
-            model=model,
-            max_tokens=1024,
-            system=system_prompt,
-            messages=[{"role": "user", "content": f"请审查以下 ArkTS 代码：\n\n{args['code']}"}],
+        text = await analyze_with_context(
+            system_prompt, "请审查以下 ArkTS 代码", files, max_tokens=1024
         )
     except Exception as e:
         # 审查失败（如中转余额不足、鉴权失败）时返回可读错误，不抛出以免 REPL 崩栈
         return {"content": [{"type": "text", "text": f"审查失败：{e}"}]}
-
-    # 提取文本回复
-    text = "".join(getattr(block, "text", "") for block in resp.content)
     return {"content": [{"type": "text", "text": text or "(审查未返回文本)"}]}
+
+
+@tool(
+    "analyze_runtime_logs",
+    "分析鸿蒙运行日志（含 ArkTS 堆栈），把报错路径映射到源码并给根因假设与修复方向。"
+    "参数：logs 日志全文；scope 可选（文件路径/子系统名/'all'，默认 'all'）。",
+    {
+        "type": "object",
+        "properties": {
+            "logs": {"type": "string"},
+            "scope": {"type": "string", "default": "all"},
+        },
+        "required": ["logs"],
+    },
+)
+async def analyze_runtime_logs_tool(args):
+    try:
+        text = await analyze_runtime_logs({
+            "logs": args["logs"],
+            "scope": args.get("scope") or "all",
+        })
+    except Exception as e:
+        return {"content": [{"type": "text", "text": f"日志分析失败：{e}"}]}
+    return {"content": [{"type": "text", "text": text or "(日志分析未返回文本)"}]}
+
+
+@tool(
+    "suggest_performance_fixes",
+    "对已有 ArkTS 代码做性能审查，给出瓶颈清单与改法。"
+    "参数：scope（文件路径/子系统名/'all'）；symptom 可选（如'列表卡顿'）。",
+    {
+        "type": "object",
+        "properties": {
+            "scope": {"type": "string"},
+            "symptom": {"type": "string"},
+        },
+        "required": ["scope"],
+    },
+)
+async def suggest_performance_fixes_tool(args):
+    try:
+        text = await suggest_performance_fixes({
+            "scope": args["scope"],
+            "symptom": args.get("symptom") or "",
+        })
+    except Exception as e:
+        return {"content": [{"type": "text", "text": f"性能分析失败：{e}"}]}
+    return {"content": [{"type": "text", "text": text or "(性能分析未返回文本)"}]}
+
+
+@tool(
+    "locate_bug",
+    "根据症状在已有 ArkTS 代码中跨文件推理定位可疑位置，给复现步骤与修复方向。"
+    "参数：scope（文件路径/子系统名/'all'）；symptom 必填（症状/报错描述）。",
+    {
+        "type": "object",
+        "properties": {
+            "scope": {"type": "string"},
+            "symptom": {"type": "string"},
+        },
+        "required": ["scope", "symptom"],
+    },
+)
+async def locate_bug_tool(args):
+    try:
+        text = await locate_bug({
+            "scope": args["scope"],
+            "symptom": args["symptom"],
+        })
+    except Exception as e:
+        return {"content": [{"type": "text", "text": f"Bug 定位失败：{e}"}]}
+    return {"content": [{"type": "text", "text": text or "(Bug 定位未返回文本)"}]}
+
+
+@tool(
+    "check_api_usage",
+    "检查 ArkTS/ArkUI API 用法（误用/废弃/V1-V2 混用/权限缺失）。"
+    "参数：scope（文件路径/子系统名/'all'）；focus_apis 可选（如'@State Navigation'）。",
+    {
+        "type": "object",
+        "properties": {
+            "scope": {"type": "string"},
+            "focus_apis": {"type": "string"},
+        },
+        "required": ["scope"],
+    },
+)
+async def check_api_usage_tool(args):
+    try:
+        text = await check_api_usage({
+            "scope": args["scope"],
+            "focus_apis": args.get("focus_apis") or "",
+        })
+    except Exception as e:
+        return {"content": [{"type": "text", "text": f"API 审查失败：{e}"}]}
+    return {"content": [{"type": "text", "text": text or "(API 审查未返回文本)"}]}
 
 
 def build_server():
@@ -184,5 +275,9 @@ def build_server():
             generate_enemy_ai,
             scaffold_deveco_project,
             review_arkts_code,
+            analyze_runtime_logs_tool,
+            suggest_performance_fixes_tool,
+            locate_bug_tool,
+            check_api_usage_tool,
         ],
     )
