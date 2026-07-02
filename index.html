@@ -377,9 +377,10 @@
           <h2>说一句话，开始你的鸿蒙组件</h2>
           <p>我会调用工具生成 ArkTS 骨架、审查代码，并把成品写入 ./generated/。下面是几个起点：</p>
           <div class="hints">
-            <div class="hint" data-prompt="生成一个玩家血条入口组件 HealthBar，并审查它">生成一个玩家血条入口组件 <code>HealthBar</code>，并审查它</div>
-            <div class="hint" data-prompt="生成背包系统组件 Inventory，展示道具网格">生成背包系统组件 <code>Inventory</code></div>
-            <div class="hint" data-prompt="审查这段 ArkTS 代码：@Component struct HealthBar { build() { Text('HP').fontSize(20) } }">审查一段 ArkTS 代码</div>
+            <div class="hint" data-prompt="生成一个战士角色属性系统，等级上限 60，并审查它">生成角色属性系统 <code>character_stats</code></div>
+            <div class="hint" data-prompt="脚手架一个叫 rpgdemo 的 DevEco 工程，把已生成的子系统组装进去">脚手架 DevEco 工程 <code>rpgdemo</code></div>
+            <div class="hint" data-prompt="分析这段运行日志的报错：[示例日志] CharacterStats.ets:42 TypeError">分析运行日志报错</div>
+            <div class="hint" data-prompt="审查这段 ArkTS 代码：@Component struct HealthBar { build() { Text('HP').fontSize(20) } }">审查 ArkTS 代码</div>
           </div>
         </div>
       </div>
@@ -417,8 +418,16 @@ let pendingNode = null;
 let textOpen = false;
 
 const TOOL_LABELS = {
-  'mcp__harmony_tools__generate_arkts_component': '生成组件',
-  'mcp__harmony_tools__review_arkts_code': '审查代码',
+  'mcp__harmony_tools__generate_character_stats': '生成角色属性',
+  'mcp__harmony_tools__generate_skill_system': '生成技能系统',
+  'mcp__harmony_tools__generate_inventory': '生成背包',
+  'mcp__harmony_tools__generate_enemy_ai': '生成敌人 AI',
+  'mcp__harmony_tools__scaffold_deveco_project': '脚手架工程',
+  'mcp__harmony_tools__review_arkts_code': '代码审查',
+  'mcp__harmony_tools__analyze_runtime_logs': '日志分析',
+  'mcp__harmony_tools__suggest_performance_fixes': '性能建议',
+  'mcp__harmony_tools__locate_bug': 'Bug 定位',
+  'mcp__harmony_tools__check_api_usage': 'API 审查',
   'Bash': '执行命令',
   'Read': '读取文件',
   'Write': '写入文件',
@@ -540,6 +549,95 @@ function addResultCard(text, isError) {
   scrollThread();
 }
 
+function addFileCard(path, content, isError) {
+  finalizeBot();
+  const div = document.createElement('div');
+  div.className = 'tool' + (isError ? ' open' : '');
+  const head = document.createElement('div');
+  head.className = 'tool-head';
+  head.innerHTML = '<span class="t-glyph">▶</span><span class="t-name"></span><span class="t-chev">▶</span>';
+  head.querySelector('.t-name').textContent = (isError ? '✕ ' : '📄 ') + path;
+  const body = document.createElement('div');
+  body.className = 'tool-body';
+  if (isError) {
+    const p = document.createElement('pre');
+    p.textContent = '写入失败';
+    body.appendChild(p);
+  } else {
+    // 导出链接
+    const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+    const exportDir = dir || '';
+    const links = document.createElement('div');
+    links.style.cssText = 'margin:6px 0;font-family:var(--font-mono);font-size:11px;display:flex;gap:14px;';
+    links.innerHTML =
+      `<a href="/export?path=${encodeURIComponent(path)}" download style="color:var(--accent);">导出该文件</a>` +
+      `<a href="/export?path=${encodeURIComponent(exportDir)}" download style="color:var(--accent);">导出整目录</a>`;
+    body.appendChild(links);
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.className = 'language-typescript';
+    code.textContent = content || '';
+    pre.appendChild(code);
+    try { hljs.highlightElement(code); } catch(e) {}
+    body.appendChild(pre);
+  }
+  head.addEventListener('click', () => div.classList.toggle('open'));
+  div.appendChild(head); div.appendChild(body);
+  // 首个 file 卡片默认展开
+  if (!messagesEl.querySelector('.file-card-default')) {
+    div.classList.add('open');
+    div.classList.add('file-card-default');
+  }
+  messagesEl.appendChild(div);
+  scrollThread();
+}
+
+function severityRank(s) {
+  return {'高':0,'中':1,'低':2}[String(s)] ?? 3;
+}
+
+function addFindingsCards(findings, isError) {
+  finalizeBot();
+  if (!findings.length) {
+    const div = document.createElement('div');
+    div.className = 'msg bot';
+    div.innerHTML = '<div class="bubble"><p>✓ 无发现</p></div>';
+    messagesEl.appendChild(div);
+    scrollThread();
+    return;
+  }
+  const sorted = [...findings].sort((a,b) => severityRank(a.severity) - severityRank(b.severity));
+  for (const f of sorted) {
+    const div = document.createElement('div');
+    div.className = 'tool open';
+    const sev = String(f.severity || '?');
+    const sevColor = {'高':'var(--err)','中':'var(--warn)','低':'#60a5fa'}[sev] || 'var(--muted-2)';
+    const head = document.createElement('div');
+    head.className = 'tool-head';
+    head.innerHTML = `<span class="t-glyph" style="color:${sevColor}">●</span><span class="t-name"></span><span class="t-chev">▶</span>`;
+    head.querySelector('.t-name').textContent = `[${sev}] ${f.location || '?'}`;
+    const body = document.createElement('div');
+    body.className = 'tool-body';
+    const addRow = (label, val) => {
+      if (!val) return;
+      const p = document.createElement('div');
+      p.style.cssText = 'margin:4px 0;font-size:12.5px;';
+      p.innerHTML = `<b style="color:var(--muted);">${label}:</b> ${String(val)}`;
+      body.appendChild(p);
+    };
+    addRow('问题', f.summary);
+    addRow('建议', f.fix);
+    for (const [k, v] of Object.entries(f)) {
+      if (['severity','location','summary','fix'].includes(k)) continue;
+      addRow(k, v);
+    }
+    head.addEventListener('click', () => div.classList.toggle('open'));
+    div.appendChild(head); div.appendChild(body);
+    messagesEl.appendChild(div);
+  }
+  scrollThread();
+}
+
 function addErrorBar(msg) {
   finalizeBot();
   const div = document.createElement('div');
@@ -604,6 +702,26 @@ function handleEvent(event, data) {
       finalizeBot();
       addToolCard(data.name, data.input);
       pendingNode = traceNode(shortToolName(data.name), 'pending', '运行中');
+      break;
+    case 'file':
+      finalizeBot();
+      addFileCard(data.path, data.content, data.is_error);
+      if (pendingNode) {
+        pendingNode.className = 't-node ' + (data.is_error ? 'err' : 'ok');
+        const tag = pendingNode.querySelector('.t-tag');
+        if (tag) tag.textContent = data.is_error ? '失败' : '文件';
+        pendingNode = null;
+      }
+      break;
+    case 'findings':
+      finalizeBot();
+      addFindingsCards(data.findings || [], data.is_error);
+      if (pendingNode) {
+        pendingNode.className = 't-node ok';
+        const tag = pendingNode.querySelector('.t-tag');
+        if (tag) tag.textContent = `${(data.findings || []).length} 条`;
+        pendingNode = null;
+      }
       break;
     case 'tool_result':
       finalizeBot();
