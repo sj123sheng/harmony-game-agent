@@ -8,8 +8,11 @@ POST /chat 返回 SSE 流，把 Agent 的消息实时推给浏览器。
 import asyncio
 import contextlib
 import json
+import os
 import threading
 import webbrowser
+import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import uvicorn
@@ -98,7 +101,77 @@ async def lifespan(_: Starlette):
         print("[server] Agent 已断开", flush=True)
 
 
-routes = [Route("/", index), Route("/chat", chat, methods=["POST"])]
+def _build_zip(root: Path) -> bytes:
+    """把 root 目录打包为 zip 字节。成员名取相对 root 的路径，防 zip slip。"""
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for member in root.rglob("*"):
+            if not member.is_file():
+                continue
+            arcname = member.relative_to(root).as_posix()
+            # zip slip 防护：arcname 不绝对、不含 .. 段
+            if arcname.startswith("/") or ".." in arcname.split("/"):
+                continue
+            zf.write(member, arcname)
+    return buf.getvalue()
+
+
+_CONTENT_TYPES = {
+    ".ets": "text/plain; charset=utf-8",
+    ".json": "application/json",
+    ".ts": "text/plain; charset=utf-8",
+    ".js": "text/plain; charset=utf-8",
+    ".md": "text/plain; charset=utf-8",
+}
+
+
+async def export(request: Request):
+    from starlette.responses import Response
+
+    raw_path = request.query_params.get("path", "").strip()
+    if not raw_path:
+        return JSONResponse({"error": "path 参数为空"}, status_code=400)
+
+    base = (BASE_DIR / "generated").resolve()
+    abs_path = (base / raw_path).resolve()
+
+    try:
+        if os.path.commonpath([abs_path, base]) != str(base):
+            return JSONResponse({"error": "路径越界"}, status_code=400)
+    except ValueError:
+        return JSONResponse({"error": "路径越界"}, status_code=400)
+
+    if not abs_path.exists():
+        return JSONResponse({"error": "路径不存在"}, status_code=404)
+
+    if abs_path.is_file():
+        ext = abs_path.suffix.lower()
+        ctype = _CONTENT_TYPES.get(ext, "application/octet-stream")
+        data = abs_path.read_bytes()
+        return Response(
+            data,
+            media_type=ctype,
+            headers={"Content-Disposition": f'attachment; filename="{abs_path.name}"'},
+        )
+
+    # 目录 → zip
+    try:
+        zip_bytes = _build_zip(abs_path)
+    except Exception as e:
+        return JSONResponse({"error": f"打包失败：{e}"}, status_code=500)
+    zip_name = abs_path.name or "generated"
+    return Response(
+        zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_name}.zip"'},
+    )
+
+
+routes = [
+    Route("/", index),
+    Route("/chat", chat, methods=["POST"]),
+    Route("/export", export, methods=["GET"]),
+]
 app = Starlette(routes=routes, lifespan=lifespan)
 
 
