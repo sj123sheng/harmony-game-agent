@@ -10,7 +10,11 @@ _API_SYSTEM_PROMPT = (
     "V2（@ComponentV2/@LocalV2/@Param/@Once/@ObservedV2/@Trace）不应在同一组件树混用\n"
     "4. 权限/能力缺失：调用需 ohos 权限的 API 是否在 module.json5 声明\n"
     "5. 平台差异：phone/tablet 不支持的 API\n"
-    "请按『API | 误用位置 | 正确用法 | 依据』格式输出。若用户给了 focus_apis，优先查这些。"
+    "若用户给了 focus_apis，优先查这些。\n"
+    "请输出一个 JSON 数组（不要 markdown 代码块标记、不要任何解释文字），"
+    "每个元素含字段：severity（高/中/低）、location（误用位置，含 API 名）、"
+    "summary（一句话误用）、fix（正确用法）、reference（依据）。"
+    "若无任何发现，返回 []。"
 )
 
 

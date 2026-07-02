@@ -52,6 +52,7 @@ def test_system_prompt_covers_log_dimensions():
     assert "堆栈" in _LOGS_SYSTEM_PROMPT
     assert "根因" in _LOGS_SYSTEM_PROMPT
     assert "置信度" in _LOGS_SYSTEM_PROMPT
+    assert "JSON 数组" in _LOGS_SYSTEM_PROMPT
     print("[OK] test_system_prompt_covers_log_dimensions")
 
 

@@ -47,6 +47,7 @@ def test_system_prompt_covers_perf_dimensions():
     assert "@State" in _PERF_SYSTEM_PROMPT
     assert "build()" in _PERF_SYSTEM_PROMPT
     assert "aboutToDisappear" in _PERF_SYSTEM_PROMPT
+    assert "JSON 数组" in _PERF_SYSTEM_PROMPT
     print("[OK] test_system_prompt_covers_perf_dimensions")
 
 
