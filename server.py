@@ -2,7 +2,7 @@
 
 起一个 Starlette 服务，常驻 ClaudeSDKClient 维持多轮会话，
 POST /chat 返回 SSE 流，把 Agent 的消息实时推给浏览器。
-复用 main.py 的 build_options() 和 _extract_tool_result_text()。
+复用 main.py 的 build_options() 和 _raw_tool_result_text()。
 """
 
 import asyncio
@@ -32,7 +32,8 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from main import _extract_tool_result_text, build_options
+from analyzers.findings import parse_findings
+from main import _raw_tool_result_text, build_options
 
 load_dotenv()
 
@@ -51,6 +52,22 @@ async def index(_: Request) -> HTMLResponse:
     return HTMLResponse(html)
 
 
+def _relative_to_generated(file_path: str) -> str | None:
+    """把 Write 的 file_path 归一化为相对 generated/ 的路径。越界返回 None。"""
+    base = (BASE_DIR / "generated").resolve()
+    try:
+        abs_path = (base / file_path).resolve() if not os.path.isabs(file_path) \
+            else Path(file_path).resolve()
+    except (ValueError, OSError):
+        return None
+    try:
+        if os.path.commonpath([abs_path, base]) != str(base):
+            return None
+    except ValueError:
+        return None
+    return abs_path.relative_to(base).as_posix()
+
+
 async def chat(request: Request):
     body = await request.json()
     prompt = (body.get("prompt") or "").strip()
@@ -61,6 +78,7 @@ async def chat(request: Request):
 
     async def stream():
         async with lock:
+            pending_writes: dict[str, dict] = {}
             try:
                 await client.query(prompt)
                 async for msg in client.receive_response():
@@ -69,14 +87,41 @@ async def chat(request: Request):
                             if isinstance(block, TextBlock):
                                 yield _sse("text", {"text": block.text})
                             elif isinstance(block, ToolUseBlock):
-                                yield _sse("tool_use", {"name": block.name, "input": block.input})
+                                if block.name == "Write":
+                                    rel = _relative_to_generated(
+                                        block.input.get("file_path", "")
+                                    )
+                                    if rel is not None:
+                                        pending_writes[block.id] = {
+                                            "path": rel,
+                                            "content": block.input.get("content", ""),
+                                        }
+                                yield _sse("tool_use", {
+                                    "name": block.name, "input": block.input
+                                })
                     elif isinstance(msg, UserMessage):
                         for block in msg.content:
                             if isinstance(block, ToolResultBlock):
-                                yield _sse("tool_result", {
-                                    "text": _extract_tool_result_text(block),
-                                    "is_error": block.is_error,
-                                })
+                                if block.tool_use_id in pending_writes:
+                                    item = pending_writes.pop(block.tool_use_id)
+                                    yield _sse("file", {
+                                        "path": item["path"],
+                                        "content": item["content"],
+                                        "is_error": block.is_error,
+                                    })
+                                else:
+                                    raw = _raw_tool_result_text(block)
+                                    findings = parse_findings(raw)
+                                    if findings is not None:
+                                        yield _sse("findings", {
+                                            "findings": findings,
+                                            "is_error": block.is_error,
+                                        })
+                                    else:
+                                        yield _sse("tool_result", {
+                                            "text": raw,
+                                            "is_error": block.is_error,
+                                        })
                     elif isinstance(msg, ResultMessage):
                         yield _sse("done", {
                             "is_error": msg.is_error,
