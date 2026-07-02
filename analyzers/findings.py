@@ -52,16 +52,26 @@ def parse_findings(text: str) -> Optional[list[dict]]:
         # 纯 JSON 对象（非数组）直接拒绝，避免正则误取其内部数组字段
         if stripped.startswith("{"):
             return None
-        m = _JSON_ARRAY_RE.search(stripped)
-        if not m:
-            return None
-        data = json.loads(m.group(0))
+        # 先尝试整文本解析（LLM 直接输出数组无 prose 的常见情况）
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError:
+            data = None
+        # 整文本失败则回退正则提取（避免贪婪匹配多数组）
+        if data is None:
+            m = _JSON_ARRAY_RE.search(stripped)
+            if not m:
+                return None
+            try:
+                data = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                return None
         if not isinstance(data, list):
             return None
         if not all(isinstance(x, dict) for x in data):
             return None
         return [_normalize_finding(f) for f in data]
-    except (json.JSONDecodeError, AttributeError, TypeError):
+    except (AttributeError, TypeError):
         return None
 
 

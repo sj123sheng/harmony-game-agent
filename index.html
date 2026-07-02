@@ -727,7 +727,7 @@ function handleEvent(event, data) {
       finalizeBot();
       addFindingsCards(data.findings || [], data.is_error);
       if (pendingNode) {
-        pendingNode.className = 't-node ok';
+        pendingNode.className = 't-node ' + (data.is_error ? 'err' : 'ok');
         const tag = pendingNode.querySelector('.t-tag');
         if (tag) tag.textContent = `${(data.findings || []).length} 条`;
         pendingNode = null;
