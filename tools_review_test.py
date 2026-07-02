@@ -41,18 +41,22 @@ def _patch_fake(return_text: str = "审查报告：1 个问题"):
 
 
 def test_review_returns_text_and_uses_framework():
-    orig, fake = _patch_fake()
+    # review JSON 化后，入口仍返回 analyze_with_context 的原文（JSON 文本），
+    # 解析责任在 server/main（与其他 4 个 analyzer 一致）。
+    payload = '[{"severity":"高","location":"X:1","summary":"状态过宽","fix":"缩小@State范围","category":"状态管理"}]'
+    orig, fake = _patch_fake(payload)
     try:
         # @tool 包装成 SdkMcpTool，原 async 函数挂在 .handler
         result = asyncio.run(tools.review_arkts_code.handler({"code": "export struct X {}"}))
     finally:
         import analyzers.framework as fw
         fw.AsyncAnthropic = orig
-    # 走了 analyze_with_context（framework 的 AsyncAnthropic 被调用）
     assert len(fake.messages.calls) == 1
-    assert fake.messages.calls[0]["system"].startswith("你是一名资深 HarmonyOS ArkTS 代码审查专家")
-    # 返回 MCP 文本结构
-    assert result["content"][0]["text"] == "审查报告：1 个问题"
+    system = fake.messages.calls[0]["system"]
+    assert system.startswith("你是一名资深 HarmonyOS ArkTS 代码审查专家")
+    assert "JSON 数组" in system, "system_prompt 应要求 JSON 数组输出"
+    assert "category" in system, "system_prompt 应声明 category 特有字段"
+    assert result["content"][0]["text"] == payload
     print("[OK] test_review_returns_text_and_uses_framework")
 
 

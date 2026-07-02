@@ -31,6 +31,7 @@
 ### Phase 4：Web 工作台增强
 
 - 4 个 analyzer 的 `system_prompt` 改 JSON 数组输出，前端渲染为结构化 findings 卡片（severity 色标 / 排序 / 特有字段）
+- `review_arkts_code` 同步 JSON 化：5 维 checklist 输出为 JSON 数组（含 `category` 维度字段），复用 findings 卡片渲染
 - `Write` 工具调用拦截：server.py 在 SSE 流内配对 Write 的 tool_use/result，前端渲染可预览 / 复制 / 导出的 file 卡片
 - `GET /export?path=<rel>` 端点：按路径打包 `generated/` 下目录为 zip 或直返单文件，含路径穿越与 zip slip 防护
 - `analyzers/findings.py` 共享解析：`parse_findings`（整文本优先 + 正则回退 + 字段别名容错）+ `_format_findings_text`
@@ -49,8 +50,8 @@
 
 ### 已知边界（非目标，留作未来扩展）
 
-- `review_arkts_code` 仍纯文本输出，未 JSON 化渲染 findings 卡片
+- `Edit` 修改无 diff 卡片
 - 仅拦截 `Write` 新建文件，`Edit` 修改无 diff 卡片
-- Web 工作台无多会话持久化 / 历史回放 / 文件树浏览
+- Web 工作台无多会话持久化 / 历史回放 / 文件树浏览（Phase 5 规划中）
 - 前端无自动化测试（手动验证清单）
 - 跨文件引用校验未实现

@@ -151,8 +151,10 @@ async def review_arkts_code(args):
         "3. 性能：是否有不必要的重渲染、昂贵操作放在 build() 中\n"
         "4. ArkTS 规范：命名约定、类型标注、是否用了 console.log（应用 hilog）等\n"
         "5. 潜在 bug：空指针、资源未释放、事件未解绑等\n"
-        "请按『等级（高/中/低）| 位置 | 描述 | 建议』格式输出清单，最后给一句总体评价。"
-        "若代码无问题，直接说明。"
+        "请输出一个 JSON 数组（不要 markdown 代码块标记、不要任何解释文字），"
+        "每个元素含字段：severity（高/中/低）、location（文件:行或组件名）、"
+        "summary（一句话问题）、fix（改法）、category（审查维度：组件结构/状态管理/性能/ArkTS规范/潜在bug）。"
+        "若无任何发现，返回 []。"
     )
     # A1 路径：把贴入代码包成 FileRef，走共享 analyze_with_context，
     # 与其余 4 个分析工具共用 LLM 调用/截断/兜底逻辑。
