@@ -21,6 +21,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from analyzers.findings import _format_findings_text, parse_findings
 from tools import build_server
 
 # 从 .env 加载环境变量（ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / ANTHROPIC_MODEL）
@@ -86,8 +87,8 @@ def build_options() -> ClaudeAgentOptions:
     )
 
 
-def _extract_tool_result_text(block: ToolResultBlock) -> str:
-    """从 ToolResultBlock.content 中提取可读文本。"""
+def _raw_tool_result_text(block: ToolResultBlock) -> str:
+    """从 ToolResultBlock.content 取原始文本，不做结构化解析。供 server.py 用。"""
     content = block.content
     if isinstance(content, list):
         parts = []
@@ -100,6 +101,18 @@ def _extract_tool_result_text(block: ToolResultBlock) -> str:
                 parts.append(str(c))
         return "\n".join(parts)
     return str(content)
+
+
+def _extract_tool_result_text(block: ToolResultBlock) -> str:
+    """从 ToolResultBlock 提取可读文本。
+    分析工具的 JSON 输出会被 parse_findings 解析并格式化为表格；
+    解析失败（非 JSON / {files} 对象 / 纯文本）回退原文。
+    """
+    raw = _raw_tool_result_text(block)
+    findings = parse_findings(raw)
+    if findings is not None:
+        return _format_findings_text(findings)
+    return raw
 
 
 def print_message(msg) -> None:
