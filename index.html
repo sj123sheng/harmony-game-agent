@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css" />
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js" crossorigin="anonymous"></script>
 <style>
   :root {
     --ink: #14121b;
@@ -79,6 +80,23 @@
   }
   .rail-meta b { color: var(--muted); font-weight: 500; }
   .rail-meta .dot-ok { color: var(--ok); }
+
+  .rail-sessions { border-bottom: 1px solid var(--line); padding: 10px 12px; }
+  .rail-sessions-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .rail-sessions-head .rs-label { font-family: var(--font-mono); font-size: 11px; color: var(--muted-2); text-transform: uppercase; letter-spacing: .08em; }
+  .rs-new { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 2px 9px; cursor: pointer; font-size: 14px; line-height: 1; transition: all .2s; }
+  .rs-new:hover { color: var(--accent); border-color: var(--accent); }
+  .rs-new:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .rail-sessions-list { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+  .rs-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 7px; cursor: pointer; border-left: 2px solid transparent; transition: all .2s; }
+  .rs-item:hover { background: var(--surface); }
+  .rs-item.active { background: var(--surface); border-left-color: var(--accent); }
+  .rs-item .rs-title { flex: 1; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rs-item.active .rs-title { color: var(--text); }
+  .rs-item .rs-del { opacity: 0; background: none; border: none; color: var(--muted-2); cursor: pointer; font-size: 13px; padding: 0 2px; }
+  .rs-item:hover .rs-del, .rs-item:focus-within .rs-del { opacity: 1; }
+  .rs-item .rs-del:hover { color: var(--err); }
+  .rs-empty { font-size: 11px; color: var(--muted-2); padding: 4px 8px; }
 
   .rail-body {
     flex: 1; overflow-y: auto;
@@ -382,6 +400,13 @@
         输出 <b>./generated/</b>
       </div>
     </div>
+    <div class="rail-sessions">
+      <div class="rail-sessions-head">
+        <span class="rs-label">会话</span>
+        <button class="rs-new" id="newSessionBtn" title="新会话">＋</button>
+      </div>
+      <div class="rail-sessions-list" id="sessionsList"></div>
+    </div>
     <div class="rail-body" id="rail">
       <div class="rail-empty" id="railEmpty">轨迹轨：每个回合的工具调用链会按顺序点亮在这里。</div>
     </div>
@@ -428,7 +453,7 @@
 const messagesEl = document.getElementById('messages');
 const threadEl = document.getElementById('thread');
 const railEl = document.getElementById('rail');
-const railEmpty = document.getElementById('railEmpty');
+let railEmpty = document.getElementById('railEmpty');
 const emptyState = document.getElementById('emptyState');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('send');
@@ -442,6 +467,10 @@ let turnNo = 0;
 let currentGroup = null;
 let pendingNode = null;
 let textOpen = false;
+let currentSessionId = null;
+let currentAbort = null; // 当前 SSE 请求的 AbortController，用于删除/切换/新建会话时取消进行中流
+const sessionsListEl = document.getElementById('sessionsList');
+const newSessionBtn = document.getElementById('newSessionBtn');
 
 const TOOL_LABELS = {
   'mcp__harmony_tools__generate_character_stats': '生成角色属性',
@@ -471,6 +500,133 @@ function shortToolName(full) {
 function scrollThread() { threadEl.scrollTop = threadEl.scrollHeight; }
 function scrollRail() { railEl.scrollTop = railEl.scrollHeight; railEl.scrollLeft = railEl.scrollWidth; }
 
+// ── 会话列表 ──
+async function loadSessions() {
+  try {
+    const resp = await fetch('/sessions');
+    if (!resp.ok) return;
+    const items = await resp.json();
+    renderSessionsList(items);
+  } catch (e) { /* 静默 */ }
+}
+
+function renderSessionsList(items) {
+  sessionsListEl.innerHTML = '';
+  if (!items.length) {
+    sessionsListEl.innerHTML = '<div class="rs-empty">尚无会话</div>';
+    return;
+  }
+  for (const it of items) {
+    const div = document.createElement('div');
+    div.className = 'rs-item' + (it.id === currentSessionId ? ' active' : '');
+    const title = document.createElement('span');
+    title.className = 'rs-title';
+    title.textContent = it.title || '(无标题)';
+    title.title = it.title || '';
+    const del = document.createElement('button');
+    del.className = 'rs-del';
+    del.textContent = '✕';
+    del.title = '删除会话';
+    del.setAttribute('aria-label', '删除会话');
+    del.addEventListener('click', (e) => { e.stopPropagation(); deleteSession(it.id); });
+    div.appendChild(title);
+    div.appendChild(del);
+    div.addEventListener('click', () => switchSession(it.id));
+    sessionsListEl.appendChild(div);
+  }
+}
+
+async function deleteSession(sid) {
+  // 取消进行中 SSE 流，防止删除后幽灵卡片继续渲染
+  if (currentAbort) { currentAbort.abort(); currentAbort = null; }
+  if (!confirm('删除该会话？历史卡片将无法回看。')) return;
+  busy = true; // 防止删除期间用户穿插发送消息
+  try {
+    const resp = await fetch(`/sessions/${sid}`, { method: 'DELETE' });
+    if (!resp.ok) { addErrorBar('删除会话失败（HTTP ' + resp.status + '）'); return; }
+    if (sid === currentSessionId) {
+      clearAll();
+      currentSessionId = null;
+    }
+    loadSessions();
+  } catch (e) {
+    addErrorBar('删除会话失败：' + String(e));
+  } finally {
+    busy = false;
+  }
+}
+
+function clearAll() {
+  messagesEl.innerHTML = '';
+  railEl.innerHTML = '<div class="rail-empty" id="railEmpty">轨迹轨：每个回合的工具调用链会按顺序点亮在这里。</div>';
+  // 重建 DOM 后更新全局引用，否则 railEmpty 仍指向被移除的旧节点
+  railEmpty = document.getElementById('railEmpty');
+  turnNo = 0; currentGroup = null; pendingNode = null; currentBot = null; textOpen = false;
+}
+
+function newSession() {
+  if (busy) return;
+  // 取消进行中 SSE 流，防止新建后幽灵卡片继续渲染
+  if (currentAbort) { currentAbort.abort(); currentAbort = null; }
+  clearAll();
+  currentSessionId = null;
+  inputEl.focus();
+  loadSessions();
+}
+
+async function switchSession(sid) {
+  if (busy) return;
+  if (sid === currentSessionId) return;
+  // 取消进行中 SSE 流，防止切换后幽灵卡片继续渲染
+  if (currentAbort) { currentAbort.abort(); currentAbort = null; }
+  busy = true; // 防止 fetch 返回前用户穿插发送消息
+  clearAll();
+  try {
+    const resp = await fetch(`/sessions/${sid}/events`);
+    if (!resp.ok) { addErrorBar('加载会话失败'); return; }
+    const data = await resp.json();
+    currentSessionId = sid;
+    replayEvents(data.events || []);
+    loadSessions();
+  } catch (e) {
+    addErrorBar(String(e));
+  } finally {
+    busy = false;
+  }
+}
+
+function replayEvents(events) {
+  // 回放按回合分段：session_started 设 id 不渲染；done/error → finalizeBot 结束当前回合；
+  // 其余事件（text/tool_use/file/findings/tool_result）→ 若当前无活跃回合则先 startTurn('历史回放')。
+  // 这样多轮回放显示多个独立 bot 气泡，不会把下一轮 text 拼到上一轮 bubble。
+  for (const { event, data } of events) {
+    if (event === 'session_started') {
+      currentSessionId = data.session_id;
+      continue;
+    }
+    if (event === 'done' || event === 'error') {
+      // 结束当前回合：不渲染 done 卡片，但关闭 bot bubble + 清 currentGroup 防止下一轮 text 拼接
+      finalizeBot();
+      currentGroup = null;
+      continue;
+    }
+    // 其余事件：若无活跃回合（首轮或上一轮已 finalize），先开新回合
+    if (currentGroup === null) {
+      hideEmpty();
+      startTurn('历史回放');
+    }
+    try {
+      handleEvent(event, data);
+    } catch (e) {
+      console.warn('回放事件渲染失败，跳过：', event, e);
+    }
+  }
+  // 末尾若仍有活跃回合，收尾
+  if (currentGroup !== null) finalizeBot();
+  scrollThread();
+  scrollRail();
+}
+
 function hideEmpty() { if (emptyState && emptyState.parentNode) emptyState.remove(); }
 
 function addUser(text) {
@@ -495,7 +651,8 @@ function newBotBubble() {
 }
 
 function renderMarkdown(el, text) {
-  el.innerHTML = marked.parse(text);
+  // DOMPurify 消毒防止存储型 XSS：Agent 恶意输出（如 <img onerror>）在回放时执行
+  el.innerHTML = DOMPurify.sanitize(marked.parse(text), { USE_PROFILES: { html: true } });
   el.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch(e){} });
   el.querySelectorAll('pre').forEach(pre => {
     if (pre.dataset.enh) return;
@@ -729,6 +886,10 @@ function parseSSE(raw) {
 
 function handleEvent(event, data) {
   switch (event) {
+    case 'session_started':
+      currentSessionId = data.session_id;
+      loadSessions();
+      break;
     case 'text':
       removeTyping();
       appendText(data.text || '');
@@ -788,11 +949,15 @@ async function send(prompt) {
   addUser(prompt);
   startTurn(prompt);
   addTyping();
+  // 创建 AbortController，允许 deleteSession/switchSession/newSession 取消进行中 SSE 流
+  const ac = new AbortController();
+  currentAbort = ac;
   try {
     const resp = await fetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, session_id: currentSessionId }),
+      signal: ac.signal,
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
@@ -816,8 +981,12 @@ async function send(prompt) {
       }
     }
   } catch (e) {
+    // abort 导致的 AbortError 静默处理（删除/切换/新建已自行清理）
+    if (e.name === 'AbortError') return;
     addErrorBar(String(e));
   } finally {
+    // 正常结束或异常退出时清空 currentAbort（abort 触发时已在调用方清空）
+    if (currentAbort === ac) currentAbort = null;
     finalizeBot();
     busy = false;
     sendBtn.disabled = false;
@@ -840,11 +1009,15 @@ document.querySelectorAll('.hint').forEach(h => {
 
 clearBtn.addEventListener('click', () => {
   if (busy) return;
-  messagesEl.innerHTML = '';
-  railEl.innerHTML = '';
-  turnNo = 0; currentGroup = null; pendingNode = null; currentBot = null;
+  // 取消进行中 SSE 流
+  if (currentAbort) { currentAbort.abort(); currentAbort = null; }
+  clearAll();
+  currentSessionId = null;
+  // 刷新列表高亮：currentSessionId=null 使无条目 active
+  loadSessions();
   inputEl.focus();
 });
+newSessionBtn.addEventListener('click', newSession);
 
 function autoGrow() {
   inputEl.style.height = 'auto';
@@ -852,6 +1025,7 @@ function autoGrow() {
 }
 inputEl.addEventListener('input', autoGrow);
 inputEl.focus();
+loadSessions();
 </script>
 </body>
 </html>

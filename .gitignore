@@ -16,3 +16,6 @@ generated/
 
 # IDE
 .idea/
+
+# Phase 5 会话事件流（本地持久化，不入仓）
+sessions/

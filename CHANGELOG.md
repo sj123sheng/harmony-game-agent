@@ -52,6 +52,17 @@
 
 - `Edit` 修改无 diff 卡片
 - 仅拦截 `Write` 新建文件，`Edit` 修改无 diff 卡片
-- Web 工作台无多会话持久化 / 历史回放 / 文件树浏览（Phase 5 规划中）
+- Web 工作台无文件树浏览（未来扩展）
 - 前端无自动化测试（手动验证清单）
 - 跨文件引用校验未实现
+
+## [v1.1.0] - 2026-07-02
+
+### Phase 5：多会话持久化与历史回放
+
+- 多会话：每会话一个常驻 `ClaudeSDKClient`，`POST /chat` 带 `session_id` 选会话；新建/复用/resume 重建三分支；LRU 回收闲置 >10min 或超 8 个的 client
+- 历史回放：每会话事件流追加写 `./sessions/<id>.jsonl`（与 SSE 同构），`GET /sessions/<id>/events` 返回 JSON，前端 rail 顶部折叠会话列表逐条重放卡片
+- 会话管理 API：`GET /sessions`（列表）、`GET /sessions/<id>/events`（回放）、`DELETE /sessions/<id>`（幂等删除）
+- `sessions_store.py`：纯 IO 模块（append/load/list/delete + 路径穿越与 id 正则双防护）
+- 续聊：常驻 client 直接 `query(prompt, session_id)`；被 LRU 回收后 `ClaudeSDKClient(options/resume=id)` 重建；resume 失败降级新建 + 提示
+- 首句标题（前 40 字），LLM 摘要留未来
