@@ -13,6 +13,9 @@ import re
 
 from anthropic import AsyncAnthropic
 
+from analyzers.framework import FileRef, analyze_with_context
+from analyzers.review_prompt import REVIEW_SYSTEM_PROMPT
+
 _ARG_SLOT = re.compile(r"__ARG:(\w+)__")
 _LLM_SLOT = re.compile(r"__LLM:(\w+)__")
 
@@ -97,74 +100,131 @@ def _strip_code_fences(text: str) -> str:
 
 
 async def hybrid_generate(spec: GeneratorSpec, args: dict) -> dict:
-    """渲染骨架 → 一次 LLM 调用填占位符 → 回填 → 返回 {files:[{path,content}]}。
+    """渲染骨架 → LLM 填充 → 回填 → 审查 → 高/中 findings 喂回 LLM 重试 1 次 → 返回。
 
-    任何 LLM/JSON 失败均降级为 // TODO，不抛异常。
+    任何 LLM/JSON/审查失败均降级，不抛异常。
+    返回 {files, error, findings}；findings 每条带 file 字段。
     """
-    # 1. 渲染确定性占位符
+    # 1. 渲染确定性占位符骨架
     skeletons: dict[str, str] = {}
     for f in spec.files:
         skeletons[f.path] = _render_args(f.template, args)
 
     # 2. 收集 LLM 占位符
     slots = _collect_llm_slots(skeletons)
-
-    fills: dict[str, dict[str, str]] = {}
     error_note = ""
 
-    if slots:
-        # 构造 prompt
+    # 3. LLM 填充（抽为内部函数，支持 extra_hint 与重试）
+    async def _fill(skeletons: dict[str, str], extra_hint: str = "") -> tuple[dict, str]:
+        """返回 (fills, error_note)。失败时 fills={} error_note 非空。"""
+        if not slots:
+            return {}, ""
         slot_list = "\n".join(f"- 文件 {s['file']} 占位符 `{s['slot']}`" for s in slots)
         skeleton_block = "\n\n".join(
             f"=== 文件 {path} ===\n{skel}" for path, skel in skeletons.items()
         )
         user_prompt = (
             f"{spec.fill_instruction}\n\n"
+            f"{extra_hint}\n\n" if extra_hint else f"{spec.fill_instruction}\n\n"
+        ) + (
             f"以下是需要填充的骨架（__LLM:名字__ 为待填占位符）：\n\n"
-            f"{skeleton_block}\n\n"
-            f"需要填充的占位符清单：\n{slot_list}\n\n"
+            f"{skeleton_block}\n\n需要填充的占位符清单：\n{slot_list}\n\n"
             f"请输出 JSON：键为文件路径，值为 {{占位符名: 填充代码}}。"
         )
-
         # 中转网关偶发空响应，最多重试 1 次
         for attempt in range(2):
             try:
                 client = AsyncAnthropic()
-                model = _resolve_model()
                 resp = await client.messages.create(
-                    model=model,
+                    model=_resolve_model(),
                     max_tokens=spec.max_tokens,
                     system=_FILLER_SYSTEM,
                     messages=[{"role": "user", "content": user_prompt}],
                 )
                 text = "".join(getattr(b, "text", "") for b in resp.content)
-                fills = json.loads(_strip_code_fences(text))
-                error_note = ""
-                break
+                return json.loads(_strip_code_fences(text)), ""
             except Exception as e:
-                error_note = f"LLM 填充失败：{e}；未填部分以 // TODO 标注。"
+                err = f"LLM 填充失败：{e}；未填部分以 // TODO 标注。"
                 if attempt == 0:
                     continue
-        else:
-            # 两次都失败，error_note 已记录，fills 保持空
-            pass
+                return {}, err
+        return {}, "LLM 填充失败：两次均未成功；未填部分以 // TODO 标注。"
 
-    # 3. 回填
-    files_out = []
-    for f in spec.files:
-        content = skeletons[f.path]
-        file_fills = fills.get(f.path, {}) if isinstance(fills, dict) else {}
+    fills, fill_err = await _fill(skeletons)
+    if fill_err:
+        error_note = fill_err
+    all_findings: list[dict] = []
 
-        def replace_slot(m):
-            name = m.group(1)
-            if name in file_fills and file_fills[name]:
-                return file_fills[name]
-            return f"// TODO: 待填充 {name}"
+    # 4. 回填（抽为内部函数，便于重试时复用）
+    def _backfill(skeletons, fills):
+        out = []
+        for f in spec.files:
+            content = skeletons[f.path]
+            file_fills = fills.get(f.path, {}) if isinstance(fills, dict) else {}
 
-        content = _LLM_SLOT.sub(replace_slot, content)
-        files_out.append({"path": f.path, "content": content})
+            def replace_slot(m, _ff=file_fills):
+                name = m.group(1)
+                if name in _ff and _ff[name]:
+                    return _ff[name]
+                return f"// TODO: 待填充 {name}"
 
-    return {"files": files_out, "error": error_note}
+            content = _LLM_SLOT.sub(replace_slot, content)
+            out.append({"path": f.path, "content": content})
+        return out
+
+    files_out = _backfill(skeletons, fills)
+
+    # 5. 审查（只对有 LLM 填充的 spec 做；纯确定性 spec 跳过）
+    if slots:
+        try:
+            review_findings = await _review_files(files_out)
+            all_findings.extend(review_findings)
+            high_mid = [f for f in review_findings if f.get("severity") in ("高", "中")]
+            # 6. 有高/中 findings → 喂回 LLM 重试 1 次
+            if high_mid:
+                hint = "上一版审查发现以下问题，请修正后重新填充：\n" + \
+                       "\n".join(
+                           f"- {f.get('location')}: {f.get('summary')}"
+                           f"（改法：{f.get('fix')}）" for f in high_mid
+                       )
+                fills2, _ = await _fill(skeletons, hint)
+                if fills2:
+                    files_out = _backfill(skeletons, fills2)
+                    # 二次审查（只收集，不再重试）；保留全部历史 findings
+                    try:
+                        second = await _review_files(files_out)
+                        all_findings.extend(second)
+                    except Exception:
+                        pass  # 二次审查失败不阻断
+        except Exception as e:
+            # 审查失败降级：不阻断，findings 保持空
+            if not error_note:
+                error_note = f"审查失败：{e}；未阻断生成。"
+
+    return {"files": files_out, "error": error_note, "findings": all_findings}
+
+
+async def _review_files(files: list[dict]) -> list[dict]:
+    """对每个生成文件调 review 审查，返回 findings 列表（已解析 JSON 数组）。
+
+    每条 finding 追加 file 字段标记来源文件。
+    """
+    all_findings: list[dict] = []
+    for f in files:
+        file_refs = [FileRef(path=f["path"], content=f["content"])]
+        text = await analyze_with_context(
+            REVIEW_SYSTEM_PROMPT, "请审查以下 ArkTS 代码", file_refs, max_tokens=1024,
+        )
+        try:
+            parsed = json.loads(_strip_code_fences(text or "[]"))
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict):
+                        item["file"] = f["path"]
+                        all_findings.append(item)
+        except Exception:
+            pass  # 审查解析失败跳过，不阻断
+    return all_findings
 
 
 def _resolve_model() -> str:
