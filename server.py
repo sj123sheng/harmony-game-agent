@@ -135,6 +135,9 @@ async def chat(request: Request):
     if not prompt:
         return JSONResponse({"error": "prompt 为空"}, status_code=400)
     session_id = body.get("session_id")
+    # 校验 session_id 格式：非空时必须是 32 位小写 hex，防止非法 id 污染 sessions dict / JSONL
+    if session_id and not _ID_PATTERN.match(session_id):
+        return JSONResponse({"error": "非法 session_id"}, status_code=400)
 
     async def stream():
         async with lock:
@@ -307,14 +310,16 @@ async def delete_session_handler(request: Request) -> JSONResponse:
     sid = request.path_params["sid"]
     if not _ID_PATTERN.match(sid):
         return JSONResponse({"error": "非法 session_id"}, status_code=400)
-    # 断开常驻 client 若存在
-    entry = sessions.pop(sid, None)
-    if entry is not None:
-        try:
-            await entry.client.disconnect()
-        except Exception:
-            pass
-    sessions_store.delete_session(BASE_DIR, sid)
+    # 加锁防止与 /chat 长流并发导致半删/复活
+    async with lock:
+        # 断开常驻 client 若存在
+        entry = sessions.pop(sid, None)
+        if entry is not None:
+            try:
+                await entry.client.disconnect()
+            except Exception:
+                pass
+        sessions_store.delete_session(BASE_DIR, sid)
     return JSONResponse({"ok": True})
 
 

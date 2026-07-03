@@ -527,6 +527,15 @@ class _ConnectRaisingFake:
         pass
 
 
+def test_chat_rejects_illegal_session_id():
+    """POST /chat {session_id:"abc123"} → 400，因 session_id 非 32 位 hex。"""
+    tc = TestClient(server.app)
+    resp = tc.post("/chat", json={"prompt": "x", "session_id": "abc123"})
+    assert resp.status_code == 400, f"期望 400，实际 {resp.status_code}"
+    assert "非法" in resp.json().get("error", "")
+    print("[OK] test_chat_rejects_illegal_session_id")
+
+
 def test_resume_failure_degrades_to_new_session():
     """resume 失败（connect raise）→ 降级新建：SSE 首条 session_started，次条 error；
     JSONL 首行 session_started；sessions 含新 sid 的 ClientEntry；新 sid 为 32 hex。"""
@@ -597,6 +606,7 @@ def main():
     test_new_session_emits_session_started_and_writes_jsonl()
     test_resume_existing_session_reuses_client()
     test_resumed_session_after_eviction_rebuilds_via_resume()
+    test_chat_rejects_illegal_session_id()
     test_resume_failure_degrades_to_new_session()
     test_sessions_list_empty()
     test_sessions_list_after_chat()

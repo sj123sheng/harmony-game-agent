@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css" />
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js" crossorigin="anonymous"></script>
 <style>
   :root {
     --ink: #14121b;
@@ -467,6 +468,7 @@ let currentGroup = null;
 let pendingNode = null;
 let textOpen = false;
 let currentSessionId = null;
+let currentAbort = null; // 当前 SSE 请求的 AbortController，用于删除/切换/新建会话时取消进行中流
 const sessionsListEl = document.getElementById('sessionsList');
 const newSessionBtn = document.getElementById('newSessionBtn');
 
@@ -535,7 +537,10 @@ function renderSessionsList(items) {
 }
 
 async function deleteSession(sid) {
+  // 取消进行中 SSE 流，防止删除后幽灵卡片继续渲染
+  if (currentAbort) { currentAbort.abort(); currentAbort = null; }
   if (!confirm('删除该会话？历史卡片将无法回看。')) return;
+  busy = true; // 防止删除期间用户穿插发送消息
   try {
     const resp = await fetch(`/sessions/${sid}`, { method: 'DELETE' });
     if (!resp.ok) { addErrorBar('删除会话失败（HTTP ' + resp.status + '）'); return; }
@@ -546,6 +551,8 @@ async function deleteSession(sid) {
     loadSessions();
   } catch (e) {
     addErrorBar('删除会话失败：' + String(e));
+  } finally {
+    busy = false;
   }
 }
 
@@ -559,6 +566,8 @@ function clearAll() {
 
 function newSession() {
   if (busy) return;
+  // 取消进行中 SSE 流，防止新建后幽灵卡片继续渲染
+  if (currentAbort) { currentAbort.abort(); currentAbort = null; }
   clearAll();
   currentSessionId = null;
   inputEl.focus();
@@ -568,6 +577,8 @@ function newSession() {
 async function switchSession(sid) {
   if (busy) return;
   if (sid === currentSessionId) return;
+  // 取消进行中 SSE 流，防止切换后幽灵卡片继续渲染
+  if (currentAbort) { currentAbort.abort(); currentAbort = null; }
   busy = true; // 防止 fetch 返回前用户穿插发送消息
   clearAll();
   try {
@@ -585,20 +596,24 @@ async function switchSession(sid) {
 }
 
 function replayEvents(events) {
-  // 回放：首条 session_started 设 currentSessionId 不渲染；done/error 跳过；
-  // 其余按回合组织——首条非 session_started 事件前开一回合"历史回放"。
-  // 单事件分发异常 try/catch 跳过继续（spec：前端回放渲染异常 单事件 try/catch）。
-  let turnStarted = false;
+  // 回放按回合分段：session_started 设 id 不渲染；done/error → finalizeBot 结束当前回合；
+  // 其余事件（text/tool_use/file/findings/tool_result）→ 若当前无活跃回合则先 startTurn('历史回放')。
+  // 这样多轮回放显示多个独立 bot 气泡，不会把下一轮 text 拼到上一轮 bubble。
   for (const { event, data } of events) {
     if (event === 'session_started') {
       currentSessionId = data.session_id;
       continue;
     }
-    if (event === 'done' || event === 'error') continue;
-    if (!turnStarted) {
+    if (event === 'done' || event === 'error') {
+      // 结束当前回合：不渲染 done 卡片，但关闭 bot bubble + 清 currentGroup 防止下一轮 text 拼接
+      finalizeBot();
+      currentGroup = null;
+      continue;
+    }
+    // 其余事件：若无活跃回合（首轮或上一轮已 finalize），先开新回合
+    if (currentGroup === null) {
       hideEmpty();
       startTurn('历史回放');
-      turnStarted = true;
     }
     try {
       handleEvent(event, data);
@@ -606,7 +621,8 @@ function replayEvents(events) {
       console.warn('回放事件渲染失败，跳过：', event, e);
     }
   }
-  if (turnStarted) finalizeBot();
+  // 末尾若仍有活跃回合，收尾
+  if (currentGroup !== null) finalizeBot();
   scrollThread();
   scrollRail();
 }
@@ -635,7 +651,8 @@ function newBotBubble() {
 }
 
 function renderMarkdown(el, text) {
-  el.innerHTML = marked.parse(text);
+  // DOMPurify 消毒防止存储型 XSS：Agent 恶意输出（如 <img onerror>）在回放时执行
+  el.innerHTML = DOMPurify.sanitize(marked.parse(text), { USE_PROFILES: { html: true } });
   el.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch(e){} });
   el.querySelectorAll('pre').forEach(pre => {
     if (pre.dataset.enh) return;
@@ -932,11 +949,15 @@ async function send(prompt) {
   addUser(prompt);
   startTurn(prompt);
   addTyping();
+  // 创建 AbortController，允许 deleteSession/switchSession/newSession 取消进行中 SSE 流
+  const ac = new AbortController();
+  currentAbort = ac;
   try {
     const resp = await fetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt, session_id: currentSessionId }),
+      signal: ac.signal,
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
@@ -960,8 +981,12 @@ async function send(prompt) {
       }
     }
   } catch (e) {
+    // abort 导致的 AbortError 静默处理（删除/切换/新建已自行清理）
+    if (e.name === 'AbortError') return;
     addErrorBar(String(e));
   } finally {
+    // 正常结束或异常退出时清空 currentAbort（abort 触发时已在调用方清空）
+    if (currentAbort === ac) currentAbort = null;
     finalizeBot();
     busy = false;
     sendBtn.disabled = false;
@@ -984,8 +1009,12 @@ document.querySelectorAll('.hint').forEach(h => {
 
 clearBtn.addEventListener('click', () => {
   if (busy) return;
+  // 取消进行中 SSE 流
+  if (currentAbort) { currentAbort.abort(); currentAbort = null; }
   clearAll();
   currentSessionId = null;
+  // 刷新列表高亮：currentSessionId=null 使无条目 active
+  loadSessions();
   inputEl.focus();
 });
 newSessionBtn.addEventListener('click', newSession);
