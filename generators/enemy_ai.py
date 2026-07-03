@@ -3,16 +3,18 @@
 from generators.framework import FileSpec, GeneratorSpec
 
 _ENEMY_TEMPLATE = """// 敌人定义 - __ARG:enemy_name__（__ARG:ai_pattern__ 型，__ARG:difficulty__）
-// 提供敌人属性与伤害结算接口，可被 EnemyAI 与 CombatResolver 调用。
-@Component
-export struct Enemy {
-  @State maxHp: number = 0
-  @State currentHp: number = 0
-  @State atk: number = 0
-  @State def: number = 0
-  @State speed: number = 0
+// 数据类 @Observed，提供敌人属性与伤害结算接口，可被 EnemyAI 与 CombatResolver 调用。
+@Observed
+export class Enemy {
+  maxHp: number = 0
+  currentHp: number = 0
+  atk: number = 0
+  def: number = 0
+  speed: number = 0
 
-  __LLM:enemy_stats__
+  constructor() {
+    __LLM:enemy_stats__
+  }
 
   // 受到伤害结算，返回实际扣血
   takeDamage(rawDamage: number): number {
@@ -27,11 +29,11 @@ export struct Enemy {
 """
 
 _ENEMY_AI_TEMPLATE = """// 敌人 AI 状态机 - __ARG:enemy_name__，模式 __ARG:ai_pattern__，难度 __ARG:difficulty__
-// 状态：Patrol 巡逻 / Chase 追击 / Attack 攻击 / Hurt 受击 / Dead 死亡
-@Component
-export struct EnemyAI {
-  @State state: string = 'Patrol'
-  @State target: Enemy = new Enemy()
+// 数据类 @Observed，状态：Patrol 巡逻 / Chase 追击 / Attack 攻击 / Hurt 受击 / Dead 死亡
+@Observed
+export class EnemyAI {
+  state: string = 'Patrol'
+  target: Enemy = new Enemy()
 
   // 每帧决策：根据距离/血量切换状态并执行行为
   think(distanceToPlayer: number, deltaMs: number): void {
@@ -46,9 +48,9 @@ export struct EnemyAI {
 """
 
 _COMBAT_RESOLVER_TEMPLATE = """// 战斗结算器 - __ARG:difficulty__ 难度
-// 处理攻击命中、伤害计算，对接 CharacterStats 与 Enemy。
-@Component
-export struct CombatResolver {
+// 数据类 @Observed，处理攻击命中、伤害计算，对接 CharacterStats 与 Enemy。
+@Observed
+export class CombatResolver {
   // 玩家攻击敌人
   playerAttackEnemy(casterAtk: number, target: Enemy, critRate: number): number {
     __LLM:player_attack_logic__
@@ -102,14 +104,14 @@ def build_enemy_ai_spec() -> GeneratorSpec:
         fill_instruction=(
             "为鸿蒙 ArkTS 敌人与战斗 AI 填充细节。敌人名、AI 模式、难度见骨架顶部注释，"
             "数值需随难度调整（困难数值更高、AI 决策更激进）。"
-            "enemy_stats 填 @State 初始数值赋值（按难度）；"
+            "enemy_stats 填 constructor 内对字段的赋值语句（如 this.maxHp = 100; this.atk = 20 等，按难度给数值，不要重复字段声明）；"
             "take_damage_logic 填 takeDamage：按 def 减伤、扣血、返回实际值；"
             "think_logic 填 think：按 distanceToPlayer 切状态（巡逻↔追击↔攻击），Boss 模式需含技能选择；"
             "transition_logic 填 transition：状态合法性校验与切换；"
             "player_attack_logic 填 playerAttackEnemy：命中判定、暴击倍率、调用 takeDamage；"
             "enemy_attack_logic 填 enemyAttackPlayer：按 atk 与 targetDef 结算；"
             "roll_logic 填 rollHit：按 critRate 掷随机命中与暴击。"
-            "只填占位符位置，不要重复 struct 声明。"
+            "只填占位符位置，不要重复 class 声明。"
         ),
         # 中转网关常强制开启 thinking，需给思考+输出留足预算
         max_tokens=4096,

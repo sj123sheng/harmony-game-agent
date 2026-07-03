@@ -3,7 +3,8 @@
 from generators.framework import FileSpec, GeneratorSpec
 
 _SKILL_TEMPLATE = """// 技能定义 - __ARG:combat_style__ 战斗风格，共 __ARG:skill_count__ 个技能
-// 描述技能数据结构与单个技能效果。可被 SkillManager 调用。
+// 数据类 @Observed，字段变更可被 @ObjectLink 子组件响应。
+@Observed
 export class Skill {
   id: number = 0
   name: string = ''
@@ -26,7 +27,8 @@ export const SKILL_DEFS: Skill[] = [
 """
 
 _BUFF_TEMPLATE = """// Buff/Debuff 定义与结算
-// 提供 Buff 数据结构、叠加/过期规则。可被 SkillManager 挂载与每帧结算。
+// 数据类 @Observed，提供 Buff 数据结构、叠加/过期规则。可被 SkillManager 挂载与每帧结算。
+@Observed
 export class Buff {
   id: string = ''
   name: string = ''
@@ -44,11 +46,11 @@ export class Buff {
 """
 
 _SKILL_MANAGER_TEMPLATE = """// 技能管理器 - __ARG:combat_style__ 战斗风格
-// 管理技能冷却、释放流程、Buff 挂载与每帧结算。
-@Component
-export struct SkillManager {
-  @State cooldowns: Map<number, number> = new Map()  // 技能id -> 剩余冷却
-  @State activeBuffs: Buff[] = []
+// 数据类 @Observed，管理技能冷却、释放流程、Buff 挂载与每帧结算。
+@Observed
+export class SkillManager {
+  cooldowns: Map<number, number> = new Map()  // 技能id -> 剩余冷却
+  activeBuffs: Buff[] = []
 
   // 释放技能：检查冷却/消耗 → 结算伤害 → 挂载附带 Buff
   castSkill(skill: Skill, casterAtk: number, targetDef: number): number {
@@ -101,15 +103,15 @@ def build_skill_system_spec() -> GeneratorSpec:
         ],
         fill_instruction=(
             "为鸿蒙 ArkTS 技能与 Buff 系统填充细节，战斗风格见骨架顶部注释。"
-            "skill_fields 填技能额外字段（如范围、目标类型）；"
+            "skill_fields 填技能额外字段声明（如范围、目标类型），不要赋初始数值；"
             "skill_cast_logic 填 cast 内按 casterAtk/targetDef 计算伤害并返回的语句；"
             "skill_defs 填若干 Skill 对象字面量（数量=skill_count，含合理数值）；"
-            "buff_fields 填 Buff 额外字段（如类型、数值）；"
+            "buff_fields 填 Buff 额外字段声明（如类型、数值），不要赋初始数值；"
             "buff_tick_logic 填 tick 内按 stacks 结算的语句；"
             "cast_flow 填释放流程（冷却检查、伤害结算、附带 Buff 挂载）；"
             "update_logic 填每帧冷却递减与 Buff 过期清理；"
             "apply_buff_logic 填叠加规则（同 id 叠层/刷新时长）。"
-            "只填占位符位置，不要重复 class/struct 声明。"
+            "只填占位符位置，不要重复 class 声明。"
         ),
         # 中转网关常强制开启 thinking，需给思考+输出留足预算
         max_tokens=4096,
