@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from starlette.testclient import TestClient
 
 import server
+import sessions_store
 
 
 def _make_generated(tmp: Path) -> Path:
@@ -141,17 +142,40 @@ def test_build_zip_no_slip():
 
 
 class _FakeClient:
-    """桩 ClaudeSDKClient，receive_response 产出预设的 SDK 消息序列。"""
+    """桩 ClaudeSDKClient：connect/disconnect 空操作，query 记 session_id，receive_response 产出预设序列。"""
 
     def __init__(self, msgs):
         self._msgs = msgs
+        self.connected = False
+        self.session_id_received = None
+        self.connect_calls = 0
 
-    async def query(self, prompt):
-        pass
+    async def connect(self, prompt=None):
+        self.connect_calls += 1
+        self.connected = True
+
+    async def disconnect(self):
+        self.connected = False
+
+    async def query(self, prompt, session_id="default"):
+        self.session_id_received = session_id
 
     async def receive_response(self):
         for m in self._msgs:
             yield m
+
+
+def _patch_sdk_client(fake_factory):
+    """把 server.ClaudeSDKClient 替换为返回 _FakeClient 的工厂。返回 orig 供还原。"""
+    import server as srv
+    orig = srv.ClaudeSDKClient
+    srv.ClaudeSDKClient = lambda options=None: fake_factory(options)
+    return orig
+
+
+def _parse_sse_events(text: str) -> list[tuple[str, dict]]:
+    """同 _parse_sse 但容忍多 data 行；用于会话测试。"""
+    return _parse_sse(text)
 
 
 def _parse_sse(text: str) -> list[tuple[str, dict]]:
@@ -176,20 +200,21 @@ def test_stream_file_event_for_write():
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         _make_generated(tmp)
-        orig = _patch_base_dir(tmp)
+        orig_base = _patch_base_dir(tmp)
+        fake = _FakeClient([
+            AssistantMessage(content=[ToolUseBlock(
+                id="w1", name="Write",
+                input={"file_path": str(tmp / "generated" / "character" / "Foo.ets"),
+                       "content": "@Component struct Foo {}"},
+            )], model="test"),
+            UserMessage(content=[ToolResultBlock(
+                tool_use_id="w1",
+                content=[{"type": "text", "text": "wrote"}],
+                is_error=False,
+            )]),
+        ])
+        orig = _patch_sdk_client(lambda options=None: fake)
         try:
-            fp = str(tmp / "generated" / "character" / "Foo.ets")
-            server.client = _FakeClient([
-                AssistantMessage(content=[ToolUseBlock(
-                    id="w1", name="Write",
-                    input={"file_path": fp, "content": "@Component struct Foo {}"},
-                )], model="test"),
-                UserMessage(content=[ToolResultBlock(
-                    tool_use_id="w1",
-                    content=[{"type": "text", "text": "wrote"}],
-                    is_error=False,
-                )]),
-            ])
             tc = TestClient(server.app)
             resp = tc.post("/chat", json={"prompt": "x"})
             assert resp.status_code == 200
@@ -202,8 +227,9 @@ def test_stream_file_event_for_write():
             assert data["content"] == "@Component struct Foo {}"
             assert data["is_error"] is False
         finally:
-            server.BASE_DIR = orig
-            server.client = None
+            server.BASE_DIR = orig_base
+            server.ClaudeSDKClient = orig
+            server.sessions.clear()
     print("[OK] test_stream_file_event_for_write")
 
 
@@ -212,7 +238,7 @@ def test_stream_findings_event_for_json_result():
     from claude_agent_sdk import AssistantMessage, UserMessage, ToolUseBlock, ToolResultBlock
 
     json_text = '[{"severity":"高","location":"a","summary":"s","fix":"f"}]'
-    server.client = _FakeClient([
+    fake = _FakeClient([
         AssistantMessage(content=[ToolUseBlock(
             id="c1", name="check_api_usage", input={},
         )], model="test"),
@@ -222,6 +248,7 @@ def test_stream_findings_event_for_json_result():
             is_error=False,
         )]),
     ])
+    orig = _patch_sdk_client(lambda options=None: fake)
     try:
         tc = TestClient(server.app)
         resp = tc.post("/chat", json={"prompt": "x"})
@@ -240,7 +267,8 @@ def test_stream_findings_event_for_json_result():
         assert f["fix"] == "f"
         assert data["is_error"] is False
     finally:
-        server.client = None
+        server.ClaudeSDKClient = orig
+        server.sessions.clear()
     print("[OK] test_stream_findings_event_for_json_result")
 
 
@@ -248,7 +276,7 @@ def test_stream_tool_result_fallback_for_plain_text():
     """非 Write tool_use + tool_result 内容为纯文本非 JSON → 断言发 tool_result 事件。"""
     from claude_agent_sdk import AssistantMessage, UserMessage, ToolUseBlock, ToolResultBlock
 
-    server.client = _FakeClient([
+    fake = _FakeClient([
         AssistantMessage(content=[ToolUseBlock(
             id="r1", name="review_arkts_code", input={},
         )], model="test"),
@@ -258,6 +286,7 @@ def test_stream_tool_result_fallback_for_plain_text():
             is_error=False,
         )]),
     ])
+    orig = _patch_sdk_client(lambda options=None: fake)
     try:
         tc = TestClient(server.app)
         resp = tc.post("/chat", json={"prompt": "x"})
@@ -270,17 +299,100 @@ def test_stream_tool_result_fallback_for_plain_text():
         assert data["text"] == "just plain text"
         assert data["is_error"] is False
     finally:
-        server.client = None
+        server.ClaudeSDKClient = orig
+        server.sessions.clear()
     print("[OK] test_stream_tool_result_fallback_for_plain_text")
 
 
-def test_parse_findings_integration():
-    """server.py 应直接用 analyzers.findings.parse_findings。"""
-    import server as srv
-    from analyzers.findings import parse_findings
-    text = '[{"severity":"高","location":"a","summary":"s","fix":"f"}]'
-    assert srv.parse_findings is parse_findings or callable(srv.parse_findings)
-    print("[OK] test_parse_findings_integration")
+def _result_msg():
+    """构造一个最小 ResultMessage。"""
+    from claude_agent_sdk import ResultMessage
+    return ResultMessage(subtype="result", duration_ms=0, duration_api_ms=0, is_error=False, num_turns=1, session_id="test")
+
+
+def test_new_session_emits_session_started_and_writes_jsonl():
+    """POST /chat 无 session_id → 新建：首条 SSE session_started 含新 UUID，JSONL 写入。"""
+    import tempfile
+    from claude_agent_sdk import AssistantMessage, TextBlock
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        orig_base = _patch_base_dir(tmp)
+        fake = _FakeClient([AssistantMessage(content=[TextBlock(text="hi")], model="test"), _result_msg()])
+        orig = _patch_sdk_client(lambda options=None: fake)
+        try:
+            tc = TestClient(server.app)
+            resp = tc.post("/chat", json={"prompt": "生成角色属性系统"})
+            assert resp.status_code == 200
+            events = _parse_sse(resp.text)
+            assert events[0][0] == "session_started", events
+            sid = events[0][1]["session_id"]
+            assert len(sid) == 32
+            assert events[0][1]["title"] == "生成角色属性系统"
+            assert fake.session_id_received == sid
+            # JSONL 存在且首行是 session_started
+            evs = sessions_store.load_events(tmp, sid)
+            assert len(evs) >= 2
+            assert evs[0][0] == "session_started"
+        finally:
+            server.BASE_DIR = orig_base
+            server.ClaudeSDKClient = orig
+            server.sessions.clear()
+    print("[OK] test_new_session_emits_session_started_and_writes_jsonl")
+
+
+def test_resume_existing_session_reuses_client():
+    """同 session_id 二次 POST → 复用 sessions[sid].client（connect_calls 不增）。"""
+    import tempfile
+    from claude_agent_sdk import AssistantMessage, TextBlock
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        orig_base = _patch_base_dir(tmp)
+        fake = _FakeClient([AssistantMessage(content=[TextBlock(text="hi")], model="test"), _result_msg()])
+        orig = _patch_sdk_client(lambda options=None: fake)
+        try:
+            tc = TestClient(server.app)
+            r1 = tc.post("/chat", json={"prompt": "first"})
+            sid = _parse_sse(r1.text)[0][1]["session_id"]
+            calls_after_first = fake.connect_calls
+            # 第二次带同一 session_id → 复用 client，不新建
+            tc.post("/chat", json={"prompt": "second", "session_id": sid})
+            assert fake.connect_calls == calls_after_first, "续聊不应新建 client"
+            assert sid in server.sessions
+        finally:
+            server.BASE_DIR = orig_base
+            server.ClaudeSDKClient = orig
+            server.sessions.clear()
+    print("[OK] test_resume_existing_session_reuses_client")
+
+
+def test_resumed_session_after_eviction_rebuilds_via_resume():
+    """session_id 不在 sessions（被回收）→ ClaudeSDKClient 重建，options.resume 被设。"""
+    import tempfile
+    from claude_agent_sdk import AssistantMessage, TextBlock
+    captured_options = {}
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        orig_base = _patch_base_dir(tmp)
+        fake = _FakeClient([AssistantMessage(content=[TextBlock(text="hi")], model="test"), _result_msg()])
+        def _factory(options=None):
+            captured_options["resume"] = getattr(options, "resume", None) if options else None
+            return fake
+        orig = _patch_sdk_client(_factory)
+        try:
+            tc = TestClient(server.app)
+            r1 = tc.post("/chat", json={"prompt": "first"})
+            sid = _parse_sse(r1.text)[0][1]["session_id"]
+            # 模拟 LRU 回收：从 sessions 移除 client
+            server.sessions.pop(sid, None)
+            captured_options["resume"] = None
+            # 再用同 sid → 应走 resume 重建
+            tc.post("/chat", json={"prompt": "second", "session_id": sid})
+            assert captured_options["resume"] == sid, f"应设 options.resume=sid，实际 {captured_options['resume']}"
+        finally:
+            server.BASE_DIR = orig_base
+            server.ClaudeSDKClient = orig
+            server.sessions.clear()
+    print("[OK] test_resumed_session_after_eviction_rebuilds_via_resume")
 
 
 def main():
@@ -294,7 +406,9 @@ def main():
     test_stream_file_event_for_write()
     test_stream_findings_event_for_json_result()
     test_stream_tool_result_fallback_for_plain_text()
-    test_parse_findings_integration()
+    test_new_session_emits_session_started_and_writes_jsonl()
+    test_resume_existing_session_reuses_client()
+    test_resumed_session_after_eviction_rebuilds_via_resume()
     print("\n全部通过。")
 
 

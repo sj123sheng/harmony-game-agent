@@ -1,6 +1,6 @@
 """harmony-game-agent 网页版 UI 后端。
 
-起一个 Starlette 服务，常驻 ClaudeSDKClient 维持多轮会话，
+起一个 Starlette 服务，按需为每会话创建 ClaudeSDKClient 维持多轮会话，
 POST /chat 返回 SSE 流，把 Agent 的消息实时推给浏览器。
 复用 main.py 的 build_options() 和 _raw_tool_result_text()。
 """
@@ -10,8 +10,12 @@ import contextlib
 import json
 import os
 import threading
+import time
+import uuid
 import webbrowser
 import zipfile
+from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -34,12 +38,68 @@ from claude_agent_sdk import (
 
 from analyzers.findings import parse_findings
 from main import _raw_tool_result_text, build_options
+import sessions_store
 
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
-client: ClaudeSDKClient | None = None
+sessions: dict[str, "ClientEntry"] = {}
 lock = asyncio.Lock()
+
+LRU_IDLE_SECS = 600
+LRU_MAX_SESSIONS = 8
+
+
+@dataclass
+class ClientEntry:
+    client: ClaudeSDKClient
+    last_used: float
+    title: str
+    created_at: str
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _sweep_lru() -> None:
+    """在 lock 内调用：回收闲置超时或超量的 client（JSONL 保留）。"""
+    now = time.monotonic()
+    # 闲置超时
+    for sid, entry in list(sessions.items()):
+        if now - entry.last_used > LRU_IDLE_SECS:
+            try:
+                asyncio.get_event_loop().create_task(entry.client.disconnect())
+            except Exception:
+                pass
+            sessions.pop(sid, None)
+    # 超量：按 last_used 最旧者移除
+    while len(sessions) > LRU_MAX_SESSIONS:
+        sid = min(sessions, key=lambda k: sessions[k].last_used)
+        entry = sessions.pop(sid)
+        try:
+            asyncio.get_event_loop().create_task(entry.client.disconnect())
+        except Exception:
+            pass
+
+
+async def _get_or_create_client(prompt: str, session_id: str | None) -> tuple[str, ClaudeSDKClient, bool]:
+    """返回 (sid, client, is_new)。sid=None → 新建 UUID；非空但 sessions 无 → resume 重建。"""
+    _sweep_lru()
+    if session_id and session_id in sessions:
+        entry = sessions[session_id]
+        entry.last_used = time.monotonic()
+        return session_id, entry.client, False
+    options = build_options()
+    is_new = not session_id
+    sid = session_id or uuid.uuid4().hex
+    if not is_new:
+        options.resume = sid  # 续聊被回收的会话：SDK 本地磁盘 resume
+    client = ClaudeSDKClient(options=options)
+    await client.connect()
+    title = (prompt[:40] + "…") if len(prompt) > 40 else prompt
+    sessions[sid] = ClientEntry(client=client, last_used=time.monotonic(), title=title, created_at=_now_iso())
+    return sid, client, is_new
 
 
 def _sse(event: str, data: dict) -> str:
@@ -73,77 +133,79 @@ async def chat(request: Request):
     prompt = (body.get("prompt") or "").strip()
     if not prompt:
         return JSONResponse({"error": "prompt 为空"}, status_code=400)
-    if client is None:
-        return JSONResponse({"error": "Agent 未连接"}, status_code=503)
+    session_id = body.get("session_id")
 
     async def stream():
         async with lock:
-            pending_writes: dict[str, dict] = {}
             try:
-                await client.query(prompt)
-                async for msg in client.receive_response():
+                sid, sess_client, is_new = await _get_or_create_client(prompt, session_id)
+            except Exception as e:
+                # resume 失败降级新建 + error 提示
+                yield _sse("error", {"message": f"历史会话不可续，已开新会话：{e}"})
+                options = build_options()
+                sid = uuid.uuid4().hex
+                sess_client = ClaudeSDKClient(options=options)
+                await sess_client.connect()
+                is_new = True
+                sessions[sid] = ClientEntry(client=sess_client, last_used=time.monotonic(), title=(prompt[:40] + "…" if len(prompt) > 40 else prompt), created_at=_now_iso())
+            pending_writes: dict[str, dict] = {}
+            title = (prompt[:40] + "…") if len(prompt) > 40 else prompt
+            if is_new:
+                started = {"session_id": sid, "title": title, "created_at": sessions[sid].created_at}
+                yield _sse("session_started", started)
+                sessions_store.append_event(BASE_DIR, sid, "session_started", started)
+            try:
+                await sess_client.query(prompt, session_id=sid)
+                async for msg in sess_client.receive_response():
                     if isinstance(msg, AssistantMessage):
                         for block in msg.content:
                             if isinstance(block, TextBlock):
-                                yield _sse("text", {"text": block.text})
+                                ev = ("text", {"text": block.text})
+                                yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
                             elif isinstance(block, ToolUseBlock):
                                 if block.name == "Write":
-                                    rel = _relative_to_generated(
-                                        block.input.get("file_path", "")
-                                    )
+                                    rel = _relative_to_generated(block.input.get("file_path", ""))
                                     if rel is not None:
-                                        pending_writes[block.id] = {
-                                            "path": rel,
-                                            "content": block.input.get("content", ""),
-                                        }
-                                yield _sse("tool_use", {
-                                    "name": block.name, "input": block.input
-                                })
+                                        pending_writes[block.id] = {"path": rel, "content": block.input.get("content", "")}
+                                ev = ("tool_use", {"name": block.name, "input": block.input})
+                                yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
                     elif isinstance(msg, UserMessage):
                         for block in msg.content:
                             if isinstance(block, ToolResultBlock):
                                 if block.tool_use_id in pending_writes:
                                     item = pending_writes.pop(block.tool_use_id)
-                                    yield _sse("file", {
-                                        "path": item["path"],
-                                        "content": item["content"],
-                                        "is_error": block.is_error,
-                                    })
+                                    ev = ("file", {"path": item["path"], "content": item["content"], "is_error": block.is_error})
+                                    yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
                                 else:
                                     raw = _raw_tool_result_text(block)
                                     findings = parse_findings(raw)
                                     if findings is not None:
-                                        yield _sse("findings", {
-                                            "findings": findings,
-                                            "is_error": block.is_error,
-                                        })
+                                        ev = ("findings", {"findings": findings, "is_error": block.is_error})
+                                        yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
                                     else:
-                                        yield _sse("tool_result", {
-                                            "text": raw,
-                                            "is_error": block.is_error,
-                                        })
+                                        ev = ("tool_result", {"text": raw, "is_error": block.is_error})
+                                        yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
                     elif isinstance(msg, ResultMessage):
-                        yield _sse("done", {
-                            "is_error": msg.is_error,
-                            "cost": msg.total_cost_usd,
-                        })
+                        ev = ("done", {"is_error": msg.is_error, "cost": msg.total_cost_usd})
+                        yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
             except Exception as e:
-                yield _sse("error", {"message": str(e)})
+                ev = ("error", {"message": str(e)})
+                yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 @contextlib.asynccontextmanager
 async def lifespan(_: Starlette):
-    global client
-    options = build_options()
-    client = ClaudeSDKClient(options=options)
-    await client.connect()
-    print(f"[server] Agent 已连接，模型={options.model}，工具已挂载", flush=True)
+    print("[server] Agent 工作台启动，会话按需创建", flush=True)
     yield
-    if client is not None:
-        await client.disconnect()
-        print("[server] Agent 已断开", flush=True)
+    # 关闭所有常驻 client
+    for entry in list(sessions.values()):
+        try:
+            await entry.client.disconnect()
+        except Exception:
+            pass
+    sessions.clear()
 
 
 def _build_zip(root: Path) -> bytes:
