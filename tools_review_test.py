@@ -107,10 +107,52 @@ def test_tool_input_schema_optional_vs_required():
     print("[OK] test_tool_input_schema_optional_vs_required")
 
 
+def test_format_files_encodes_findings_as_marker_json():
+    """_format_files 输出含 %%FINDINGS_JSON%% marker 包裹的 JSON 数组，可被 parse_findings 解析。"""
+    from analyzers.findings import parse_findings
+
+    result = {
+        "files": [{"path": "x/A.ets", "content": "export struct A {}"}],
+        "error": "",
+        "findings": [
+            {"severity": "高", "file": "x/A.ets", "summary": "问题A", "fix": "改法A"},
+        ],
+    }
+    text = tools._format_files(result)
+    # marker 段存在
+    assert "%%FINDINGS_JSON%%" in text
+    assert "%%END_FINDINGS%%" in text
+    # 从 marker 段提取的 JSON 能被 parse_findings 解析
+    import json as _json
+    import re as _re
+    m = _re.search(r"%%FINDINGS_JSON%%\n(.*?)\n%%END_FINDINGS%%", text, _re.DOTALL)
+    assert m is not None
+    parsed = parse_findings(m.group(1))
+    assert parsed is not None
+    assert len(parsed) == 1
+    assert parsed[0]["severity"] == "高"
+    assert parsed[0]["summary"] == "问题A"
+    print("[OK] test_format_files_encodes_findings_as_marker_json")
+
+
+def test_format_files_no_findings_no_marker():
+    """无 findings 时输出不含 marker。"""
+    result = {
+        "files": [{"path": "x/A.ets", "content": "struct A {}"}],
+        "error": "",
+        "findings": [],
+    }
+    text = tools._format_files(result)
+    assert "%%FINDINGS_JSON%%" not in text
+    print("[OK] test_format_files_no_findings_no_marker")
+
+
 def main():
     test_review_returns_text_and_uses_framework()
     test_review_failure_returns_friendly_text()
     test_tool_input_schema_optional_vs_required()
+    test_format_files_encodes_findings_as_marker_json()
+    test_format_files_no_findings_no_marker()
     print("\n全部通过。")
 
 

@@ -3,11 +3,12 @@
 from generators.framework import FileSpec, GeneratorSpec
 
 _ITEM_TEMPLATE = """// 物品定义 - __ARG:stack_state__
-// 描述物品数据结构与稀有度。可被 Inventory 与 Equipment 引用。
+// 数据类 @Observed，描述物品数据结构与稀有度。可被 Inventory 与 Equipment 引用。
 export enum Rarity {
   Common, Rare, Epic, Legendary
 }
 
+@Observed
 export class Item {
   id: number = 0
   name: string = ''
@@ -26,10 +27,13 @@ export const ITEM_DEFS: Item[] = [
 """
 
 _INVENTORY_TEMPLATE = """// 背包逻辑 - __ARG:slot_count__ 格，__ARG:stack_state__
-// 格子增删/查找/堆叠。可被 InventoryUI 引用。
-@Component
-export struct Inventory {
-  @State slots: (Item | null)[] = []
+// 数据类 @Observed，格子增删/查找/堆叠。可被 InventoryUI 引用。
+// 引用 Item 类型（跨文件），需显式 import。
+import { Item } from './Item'
+
+@Observed
+export class Inventory {
+  slots: (Item | null)[] = []
 
   // 初始化空格子
   init() {
@@ -54,10 +58,13 @@ export struct Inventory {
 """
 
 _EQUIPMENT_TEMPLATE = """// 装备槽穿戴与属性结算
-// 装备槽：__ARG:equipment_slots__
-@Component
-export struct Equipment {
-  @State slots: Map<string, Item | null> = new Map()
+// 数据类 @Observed，装备槽：__ARG:equipment_slots__
+// 引用 Item 类型（跨文件），需显式 import。
+import { Item } from './Item'
+
+@Observed
+export class Equipment {
+  slots: Map<string, Item | null> = new Map()
 
   // 穿戴装备到指定槽位，返回被替换的旧装备
   equip(slot: string, item: Item): Item | null {
@@ -76,12 +83,14 @@ export struct Equipment {
 }
 """
 
-_INVENTORY_UI_TEMPLATE = """// 背包 UI - 入口组件
+_INVENTORY_UI_TEMPLATE = """// 背包 UI - 子组件
 // 展示 __ARG:slot_count__ 格背包与装备槽：__ARG:equipment_slots__
-@Entry
+// 子组件，由父组件传入 Inventory 实例（@ObjectLink 观察字段变更）。
+import { Inventory } from './Inventory'
+
 @Component
-struct InventoryUI {
-  @State bag: Inventory = new Inventory()
+export struct InventoryUI {
+  @ObjectLink bag: Inventory
 
   build() {
     Column() {
@@ -136,7 +145,7 @@ def build_inventory_spec() -> GeneratorSpec:
         ],
         fill_instruction=(
             "为鸿蒙 ArkTS 背包与装备系统填充细节。堆叠支持见骨架顶部注释，装备槽列表见骨架。"
-            "item_fields 填物品额外字段（如描述、图标）；"
+            "item_fields 填物品额外字段声明（如描述、图标），不要赋初始数值；"
             "item_defs 填若干示例 Item 对象字面量（含不同稀有度）；"
             "add_logic 填 addItem：可堆叠则合并到同 id 格子，否则找空格放入，满返 false；"
             "remove_logic 填 removeAt 置空逻辑；"
@@ -144,7 +153,8 @@ def build_inventory_spec() -> GeneratorSpec:
             "equip_logic 填 equip：存入槽位并返回旧装备；"
             "unequip_logic 填 unequip：取出并置空；"
             "bonus_logic 填 totalBonus：遍历已穿戴装备累加 atk/def/hp；"
-            "ui_layout 填 InventoryUI build() 内的格子网格与装备槽展示组件。"
+            "ui_layout 填 InventoryUI build() 内的格子网格与装备槽展示组件，"
+            "通过 this.bag.slots / this.bag.findIndex 等 @ObjectLink 字段读数据展示。"
             "只填占位符位置，不要重复 class/struct 声明。"
         ),
         # 中转网关常强制开启 thinking，需给思考+输出留足预算

@@ -7,6 +7,8 @@
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+import json
+
 from analyzers import (
     analyze_runtime_logs,
     check_api_usage,
@@ -14,6 +16,7 @@ from analyzers import (
     suggest_performance_fixes,
 )
 from analyzers.framework import FileRef, analyze_with_context
+from analyzers.review_prompt import REVIEW_SYSTEM_PROMPT
 from generators import (
     build_character_stats_spec,
     build_deveco_project_spec,
@@ -29,7 +32,11 @@ _DEVECO_PROJECT_SPEC = build_deveco_project_spec([])
 
 
 def _format_files(result: dict) -> str:
-    """把 hybrid_generate 的 {files,error} 格式化成可读文本，供主 Agent 据此 Write。"""
+    """把 hybrid_generate 的 {files,error,findings} 格式化成可读文本，供主 Agent 据此 Write。
+
+    findings 段用 marker 包裹的 JSON 数组附加在末尾，供 server.py stream() 提取
+    转为 SSE findings 事件（前端渲染卡片）。marker 外的文本作为 tool_result 文本展示。
+    """
     parts = []
     if result.get("error"):
         parts.append(f"[注意] {result['error']}")
@@ -37,6 +44,10 @@ def _format_files(result: dict) -> str:
     parts.append(f"已生成 {len(files)} 个文件（请用 Write 写入 ./generated/ 下对应路径）：")
     for f in files:
         parts.append(f"\n=== {f['path']} ===\n{f['content']}")
+    # 审查闭环产出的 findings：用 marker 包裹 JSON 数组，供 server.py 提取
+    findings = result.get("findings") or []
+    if findings:
+        parts.append(f"\n%%FINDINGS_JSON%%\n{json.dumps(findings, ensure_ascii=False)}\n%%END_FINDINGS%%")
     return "\n".join(parts)
 
 
@@ -143,19 +154,9 @@ async def scaffold_deveco_project(args):
 )
 async def review_arkts_code(args):
     # 固定的审查者 system prompt + checklist，保证每次审查流程一致、可复现
-    system_prompt = (
-        "你是一名资深 HarmonyOS ArkTS 代码审查专家。对用户给出的 ArkTS 代码进行审查，"
-        "从以下维度逐一检查并报告问题：\n"
-        "1. 组件结构：@Component/@Entry/build() 是否完整、是否符合 ArkTS 组件规范\n"
-        "2. 状态管理：@State/@Prop/@Link 使用是否合理，是否有冗余状态\n"
-        "3. 性能：是否有不必要的重渲染、昂贵操作放在 build() 中\n"
-        "4. ArkTS 规范：命名约定、类型标注、是否用了 console.log（应用 hilog）等\n"
-        "5. 潜在 bug：空指针、资源未释放、事件未解绑等\n"
-        "请输出一个 JSON 数组（不要 markdown 代码块标记、不要任何解释文字），"
-        "每个元素含字段：severity（高/中/低）、location（文件:行或组件名）、"
-        "summary（一句话问题）、fix（改法）、category（审查维度：组件结构/状态管理/性能/ArkTS规范/潜在bug）。"
-        "若无任何发现，返回 []。"
-    )
+    # 提取为 analyzers.review_prompt.REVIEW_SYSTEM_PROMPT 共享常量，
+    # 供 generators.framework 审查闭环复用同一 checklist。
+    system_prompt = REVIEW_SYSTEM_PROMPT
     # A1 路径：把贴入代码包成 FileRef，走共享 analyze_with_context，
     # 与其余 4 个分析工具共用 LLM 调用/截断/兜底逻辑。
     files = [FileRef(path="<贴入代码>", content=args["code"])]

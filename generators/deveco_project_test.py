@@ -152,7 +152,7 @@ def test_safe_project_slug_chinese_replaced():
 def test_run_scaffold_empty_project_name_safe_paths():
     """空 project_name 时所有路径以 game/ 前缀，不逃逸到 ./generated/ 外。"""
     with tempfile.TemporaryDirectory() as d:
-        orig, fake = _patch_fake(
+        orig, afw_orig, fake = _patch_fake(
             '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "// demo"}}'
         )
         try:
@@ -162,7 +162,9 @@ def test_run_scaffold_empty_project_name_safe_paths():
             }))
         finally:
             import generators.framework as fw
+            import analyzers.framework as afw
             fw.AsyncAnthropic = orig
+            afw.AsyncAnthropic = afw_orig
     for f in result["files"]:
         assert f["path"].startswith("game/"), f["path"]
         assert not f["path"].startswith("/"), f["path"]
@@ -181,7 +183,7 @@ def test_main_pages_json_uses_pages_index_format():
 def test_run_scaffold_main_pages_json_content():
     """run_scaffold 输出的 main_pages.json 应含 pages/Index。"""
     with tempfile.TemporaryDirectory() as d:
-        orig, fake = _patch_fake(
+        orig, afw_orig, fake = _patch_fake(
             '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "// demo"}}'
         )
         try:
@@ -191,7 +193,9 @@ def test_run_scaffold_main_pages_json_content():
             }))
         finally:
             import generators.framework as fw
+            import analyzers.framework as afw
             fw.AsyncAnthropic = orig
+            afw.AsyncAnthropic = afw_orig
     mp = next(f for f in result["files"]
               if f["path"] == "rpgdemo/entry/src/main/resources/base/profile/main_pages.json")
     assert "pages/Index" in mp["content"]
@@ -251,7 +255,7 @@ def test_run_scaffold_index_ets_has_imports_and_no_residuals():
         Path(d, "character").mkdir()
         Path(d, "character", "CharacterStats.ets").write_text(
             "export struct CharacterStats { @State hp: number = 100 }", encoding="utf-8")
-        orig, fake = _patch_fake(
+        orig, afw_orig, fake = _patch_fake(
             '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "// demo filled"}}'
         )
         try:
@@ -261,7 +265,9 @@ def test_run_scaffold_index_ets_has_imports_and_no_residuals():
             }))
         finally:
             import generators.framework as fw
+            import analyzers.framework as afw
             fw.AsyncAnthropic = orig
+            afw.AsyncAnthropic = afw_orig
     idx = next(f for f in result["files"]
                if f["path"] == "rpgdemo/entry/src/main/ets/pages/Index.ets")
     assert "import { CharacterStats } from '../game/character/CharacterStats';" in idx["content"]
@@ -294,6 +300,8 @@ def test_build_spec_has_all_deterministic_files():
     paths = [f.path for f in spec.files]
     expected = [
         "AppScope/app.json5",
+        "AppScope/resources/base/element/string.json",
+        "AppScope/resources/base/element/color.json",
         "entry/src/main/module.json5",
         "entry/src/main/ets/entryability/EntryAbility.ets",
         "entry/src/main/ets/pages/Index.ets",
@@ -305,12 +313,30 @@ def test_build_spec_has_all_deterministic_files():
         "entry/src/main/resources/zh_CN/element/string.json",
         "entry/build-profile.json5",
         "entry/hvigorfile.ts",
+        "entry/oh-package.json5",
         "build-profile.json5",
         "hvigorfile.ts",
         "oh-package.json5",
     ]
     assert paths == expected, paths
     print("[OK] test_build_spec_has_all_deterministic_files")
+
+
+def test_scaffold_includes_missing_deveco_files():
+    """脚手架须含 entry/oh-package.json5、AppScope resources、minAPIVersion。"""
+    spec = build_deveco_project_spec([])  # 无子系统
+    paths = [f.path for f in spec.files]
+    assert "entry/oh-package.json5" in paths, "缺模块级 oh-package.json5"
+    assert "AppScope/resources/base/element/string.json" in paths
+    assert "AppScope/resources/base/element/color.json" in paths
+    # signingConfig 不引用空 signingConfigs
+    root_build = [f for f in spec.files if f.path == "build-profile.json5"][0].template
+    assert '"signingConfig"' not in root_build, "root build-profile 不得引用空 signingConfigs"
+    assert '"signingConfigs": []' in root_build, "signingConfigs 须为空数组"
+    # app.json5 含 minAPIVersion
+    app = [f for f in spec.files if f.path == "AppScope/app.json5"][0].template
+    assert "minAPIVersion" in app
+    print("[OK] test_scaffold_includes_missing_deveco_files")
 
 
 def test_build_spec_index_ets_has_llm_slot():
@@ -365,11 +391,20 @@ class _FakeAnthropic:
 
 
 def _patch_fake(return_text: str):
+    """桩 LLM：fw 用于填充，afw 用于审查（返回空 findings 避免真实调用）。
+
+    Task 2 审查闭环启用后，deveco spec 含 __LLM:demo_body__ 会触发审查走
+    真实 LLM 调用。须同时打桩 afw.AsyncAnthropic 返回 []，与 framework_test
+    既有测试的打桩方式一致。
+    """
     import generators.framework as fw
+    import analyzers.framework as afw
     fake = _FakeAnthropic(return_text)
     orig = fw.AsyncAnthropic
+    afw_orig = afw.AsyncAnthropic
     fw.AsyncAnthropic = lambda *a, **k: fake
-    return orig, fake
+    afw.AsyncAnthropic = lambda *a, **k: _FakeAnthropic("[]")
+    return orig, afw_orig, fake
 
 
 def test_run_scaffold_copies_subsystem_files_with_project_prefix():
@@ -379,7 +414,7 @@ def test_run_scaffold_copies_subsystem_files_with_project_prefix():
         Path(d, "character", "CharacterStats.ets").write_text(
             "export struct CharacterStats { @State hp: number = 100 }", encoding="utf-8")
         # 桩 LLM：对 Index.ets 返回 demo_body 填充
-        orig, fake = _patch_fake(
+        orig, afw_orig, fake = _patch_fake(
             '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "// demo filled"}}'
         )
         try:
@@ -389,7 +424,9 @@ def test_run_scaffold_copies_subsystem_files_with_project_prefix():
             }))
         finally:
             import generators.framework as fw
+            import analyzers.framework as afw
             fw.AsyncAnthropic = orig
+            afw.AsyncAnthropic = afw_orig
     paths = [f["path"] for f in result["files"]]
     # 子系统文件在前，带 project 前缀与 game/ 路径
     assert "rpgdemo/entry/src/main/ets/game/character/CharacterStats.ets" in paths, paths
@@ -413,14 +450,16 @@ def test_run_scaffold_copies_subsystem_files_with_project_prefix():
 
 def test_run_scaffold_empty_scan_dir_still_produces_skeleton():
     with tempfile.TemporaryDirectory() as d:
-        orig, fake = _patch_fake(
+        orig, afw_orig, fake = _patch_fake(
             '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "build() { Column(){Text(\"empty\")} }"}}'
         )
         try:
             result = asyncio.run(run_scaffold({"project_name": "empty", "scan_dir": d}))
         finally:
             import generators.framework as fw
+            import analyzers.framework as afw
             fw.AsyncAnthropic = orig
+            afw.AsyncAnthropic = afw_orig
     paths = [f["path"] for f in result["files"]]
     assert "empty/AppScope/app.json5" in paths
     assert not any("game/" in p for p in paths)  # 无子系统搬运
@@ -431,22 +470,53 @@ def test_run_scaffold_llm_failure_degrades_index():
     with tempfile.TemporaryDirectory() as d:
         # 桩 LLM 抛异常
         import generators.framework as fw
+        import analyzers.framework as afw
         class _Raising:
             async def create(self, **k):
                 raise RuntimeError("余额不足")
         raising = _Raising()
         orig = fw.AsyncAnthropic
+        afw_orig = afw.AsyncAnthropic
         fw.AsyncAnthropic = lambda *a, **k: SimpleNamespace(messages=raising)
+        # 审查打桩返回空 findings，避免真实调用
+        afw.AsyncAnthropic = lambda *a, **k: _FakeAnthropic("[]")
         try:
             result = asyncio.run(run_scaffold({"project_name": "rpgdemo", "scan_dir": d}))
         finally:
             fw.AsyncAnthropic = orig
+            afw.AsyncAnthropic = afw_orig
     idx = next(f for f in result["files"] if f["path"] == "rpgdemo/entry/src/main/ets/pages/Index.ets")
     assert "// TODO: 待填充 demo_body" in idx["content"]
     assert result["error"] != ""
     # 其余配置文件仍产出
     assert any(f["path"] == "rpgdemo/AppScope/app.json5" for f in result["files"])
     print("[OK] test_run_scaffold_llm_failure_degrades_index")
+
+
+def test_run_scaffold_passes_through_findings():
+    """I-2: run_scaffold 返回值须透传 hybrid_generate 的 findings 字段。"""
+    with tempfile.TemporaryDirectory() as d:
+        orig, afw_orig, fake = _patch_fake(
+            '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "// demo"}}'
+        )
+        # 覆盖审查桩：返回 1 条 finding，验证透传
+        import analyzers.framework as afw
+        review_payload = '[{"severity":"高","location":"Index.ets","summary":"test","fix":"fix","category":"测试"}]'
+        afw.AsyncAnthropic = lambda *a, **k: _FakeAnthropic(review_payload)
+        try:
+            result = asyncio.run(run_scaffold({
+                "project_name": "rpgdemo",
+                "scan_dir": d,
+            }))
+        finally:
+            import generators.framework as fw
+            fw.AsyncAnthropic = orig
+            afw.AsyncAnthropic = afw_orig
+    # I-2: findings 须透传（_review_files 对每个文件调一次审查，桩对每次都返回同一条）
+    assert "findings" in result, "run_scaffold 返回值缺 findings 字段"
+    assert len(result["findings"]) >= 1, result["findings"]
+    assert result["findings"][0]["summary"] == "test"
+    print("[OK] test_run_scaffold_passes_through_findings")
 
 
 def main():
@@ -482,10 +552,12 @@ def main():
     test_build_spec_index_ets_has_llm_slot()
     test_build_spec_fill_instruction_lists_imports()
     test_build_spec_fill_instruction_empty_when_no_subsystems()
+    test_scaffold_includes_missing_deveco_files()
     # run_scaffold
     test_run_scaffold_copies_subsystem_files_with_project_prefix()
     test_run_scaffold_empty_scan_dir_still_produces_skeleton()
     test_run_scaffold_llm_failure_degrades_index()
+    test_run_scaffold_passes_through_findings()
     print("\n全部通过。")
 
 
