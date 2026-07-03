@@ -31,6 +31,12 @@ def _assert_panel(tmpl, panel_name, import_path):
         f"{panel_name} @ObjectLink 字段不得在声明处初始化（去 = new ...）"
 
 
+def _assert_cross_file_import(tmpl, class_name, file_name):
+    """跨文件类型引用断言：模板引用了其他 FileSpec export 的类型时，须有对应 import。"""
+    expected = f"import {{ {class_name} }} from './{file_name}'"
+    assert expected in tmpl, f"引用 {class_name} 类型须显式 import: {expected}"
+
+
 def test_skill_system_template():
     spec = build_skill_system_spec()
     # File 0: Skill.ets — 数据类
@@ -39,6 +45,10 @@ def test_skill_system_template():
     _assert_data_class(spec.files[1].template, "Buff")
     # File 2: SkillManager.ets — 逻辑类（非 UI 面板）
     _assert_data_class(spec.files[2].template, "SkillManager")
+    # SkillManager 引用 Skill 与 Buff（跨文件），须显式 import
+    skill_mgr_tmpl = spec.files[2].template
+    _assert_cross_file_import(skill_mgr_tmpl, "Skill", "Skill")
+    _assert_cross_file_import(skill_mgr_tmpl, "Buff", "Buff")
     print("[OK] test_skill_system_template")
 
 
@@ -48,8 +58,12 @@ def test_inventory_template():
     _assert_data_class(spec.files[0].template, "Item")
     # File 1: Inventory.ets — 逻辑类（非 UI 面板）
     _assert_data_class(spec.files[1].template, "Inventory")
+    # Inventory 引用 Item（跨文件），须显式 import
+    _assert_cross_file_import(spec.files[1].template, "Item", "Item")
     # File 2: Equipment.ets — 逻辑类（非 UI 面板）
     _assert_data_class(spec.files[2].template, "Equipment")
+    # Equipment 引用 Item（跨文件），须显式 import
+    _assert_cross_file_import(spec.files[2].template, "Item", "Item")
     # File 3: InventoryUI.ets — UI 面板
     _assert_panel(spec.files[3].template, "InventoryUI",
                   "import { Inventory } from './Inventory'")
@@ -71,8 +85,12 @@ def test_enemy_ai_template():
         "enemy_stats 占位符须在 constructor() 体内"
     # File 1: EnemyAI.ets — 逻辑类
     _assert_data_class(spec.files[1].template, "EnemyAI")
+    # EnemyAI 引用 Enemy（跨文件），须显式 import
+    _assert_cross_file_import(spec.files[1].template, "Enemy", "Enemy")
     # File 2: CombatResolver.ets — 逻辑类
     _assert_data_class(spec.files[2].template, "CombatResolver")
+    # CombatResolver 引用 Enemy（跨文件），须显式 import
+    _assert_cross_file_import(spec.files[2].template, "Enemy", "Enemy")
     print("[OK] test_enemy_ai_template")
 
 

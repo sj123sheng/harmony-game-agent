@@ -30,6 +30,9 @@ export class Enemy {
 
 _ENEMY_AI_TEMPLATE = """// 敌人 AI 状态机 - __ARG:enemy_name__，模式 __ARG:ai_pattern__，难度 __ARG:difficulty__
 // 数据类 @Observed，状态：Patrol 巡逻 / Chase 追击 / Attack 攻击 / Hurt 受击 / Dead 死亡
+// 引用 Enemy 类型（跨文件），需显式 import。
+import { Enemy } from './Enemy'
+
 @Observed
 export class EnemyAI {
   state: string = 'Patrol'
@@ -49,6 +52,9 @@ export class EnemyAI {
 
 _COMBAT_RESOLVER_TEMPLATE = """// 战斗结算器 - __ARG:difficulty__ 难度
 // 数据类 @Observed，处理攻击命中、伤害计算，对接 CharacterStats 与 Enemy。
+// 引用 Enemy 类型（跨文件），需显式 import。
+import { Enemy } from './Enemy'
+
 @Observed
 export class CombatResolver {
   // 玩家攻击敌人

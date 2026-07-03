@@ -47,6 +47,10 @@ export class Buff {
 
 _SKILL_MANAGER_TEMPLATE = """// 技能管理器 - __ARG:combat_style__ 战斗风格
 // 数据类 @Observed，管理技能冷却、释放流程、Buff 挂载与每帧结算。
+// 引用 Skill 与 Buff 类型（跨文件），需显式 import。
+import { Skill } from './Skill'
+import { Buff } from './Buff'
+
 @Observed
 export class SkillManager {
   cooldowns: Map<number, number> = new Map()  // 技能id -> 剩余冷却

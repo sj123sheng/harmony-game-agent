@@ -28,6 +28,9 @@ export const ITEM_DEFS: Item[] = [
 
 _INVENTORY_TEMPLATE = """// 背包逻辑 - __ARG:slot_count__ 格，__ARG:stack_state__
 // 数据类 @Observed，格子增删/查找/堆叠。可被 InventoryUI 引用。
+// 引用 Item 类型（跨文件），需显式 import。
+import { Item } from './Item'
+
 @Observed
 export class Inventory {
   slots: (Item | null)[] = []
@@ -56,6 +59,9 @@ export class Inventory {
 
 _EQUIPMENT_TEMPLATE = """// 装备槽穿戴与属性结算
 // 数据类 @Observed，装备槽：__ARG:equipment_slots__
+// 引用 Item 类型（跨文件），需显式 import。
+import { Item } from './Item'
+
 @Observed
 export class Equipment {
   slots: Map<string, Item | null> = new Map()
