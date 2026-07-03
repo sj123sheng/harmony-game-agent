@@ -84,6 +84,7 @@ _APP_JSON5 = """{
     "vendor": "harmony-game-agent",
     "versionCode": 1,
     "versionName": "1.0.0",
+    "minAPIVersion": 12,
     "icon": "$media:app_icon",
     "label": "__ARG:label__"
   }
@@ -202,7 +203,7 @@ export default {
 """
 
 _ROOT_BUILD_PROFILE = """{
-  "app": { "signingConfigs": [], "products": [{ "name": "default", "signingConfig": "default" }] },
+  "app": { "signingConfigs": [], "products": [{ "name": "default" }] },
   "modules": [{ "name": "entry", "srcPath": "./entry", "targets": [{ "name": "default", "applyToProducts": ["default"] }] }]
 }
 """
@@ -217,6 +218,30 @@ _OH_PACKAGE_JSON5 = """{
   "devDependencies": {
     "@ohos/hypium": "1.0.6"
   }
+}
+"""
+
+_ENTRY_OH_PACKAGE_JSON5 = """{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "entry module",
+  "main": "",
+  "license": "MIT",
+  "dependencies": {}
+}
+"""
+
+_APP_STRING_JSON = """{
+  "string": [
+    { "name": "app_name", "value": "__ARG:label__" }
+  ]
+}
+"""
+
+_APP_COLOR_JSON = """{
+  "color": [
+    { "name": "start_window_background", "value": "#FFFFFF" }
+  ]
 }
 """
 
@@ -323,6 +348,8 @@ def build_deveco_project_spec(subsystems: list[Subsystem]) -> GeneratorSpec:
         },
         files=[
             FileSpec("AppScope/app.json5", _APP_JSON5),
+            FileSpec("AppScope/resources/base/element/string.json", _APP_STRING_JSON),
+            FileSpec("AppScope/resources/base/element/color.json", _APP_COLOR_JSON),
             FileSpec("entry/src/main/module.json5", _MODULE_JSON5),
             FileSpec("entry/src/main/ets/entryability/EntryAbility.ets", _ENTRY_ABILITY_ETS),
             FileSpec("entry/src/main/ets/pages/Index.ets", _INDEX_ETS, fill_targets=["demo_body"]),
@@ -334,6 +361,7 @@ def build_deveco_project_spec(subsystems: list[Subsystem]) -> GeneratorSpec:
             FileSpec("entry/src/main/resources/zh_CN/element/string.json", _STRING_JSON_ZH),
             FileSpec("entry/build-profile.json5", _ENTRY_BUILD_PROFILE),
             FileSpec("entry/hvigorfile.ts", _HVIGORFILE_TS),
+            FileSpec("entry/oh-package.json5", _ENTRY_OH_PACKAGE_JSON5),
             FileSpec("build-profile.json5", _ROOT_BUILD_PROFILE),
             FileSpec("hvigorfile.ts", _HVIGORFILE_TS),
             FileSpec("oh-package.json5", _OH_PACKAGE_JSON5),
