@@ -198,6 +198,9 @@ async def chat(request: Request):
                 yield _sse("session_started", started)
                 sessions_store.append_event(BASE_DIR, sid, "session_started", started)
             try:
+                # 持久化用户 prompt 为 user 事件，供回放显示每轮用户消息（实时流由前端 handleEvent 统一渲染）
+                ev = ("user", {"prompt": prompt})
+                yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
                 await sess_client.query(prompt, session_id=sid)
                 async for msg in sess_client.receive_response():
                     if isinstance(msg, AssistantMessage):
@@ -347,19 +350,23 @@ async def session_events(request: Request) -> JSONResponse:
 
 
 async def delete_session_handler(request: Request) -> JSONResponse:
-    """DELETE /sessions/<id> → 幂等删除：断开常驻 client + 删 JSONL。"""
+    """DELETE /sessions/<id> → 幂等删除：先断常驻 client（不持锁，立即中断该会话的 /chat 流），
+    再持锁删 JSONL（防 /chat stream 同时 append 致"删了又复活"）。"""
     sid = request.path_params["sid"]
     if not _ID_PATTERN.match(sid):
         return JSONResponse({"error": "非法 session_id"}, status_code=400)
-    # 加锁防止与 /chat 长流并发导致半删/复活
+    # 先 pop + disconnect（不持 lock）：若该会话正有 /chat 长流在跑，disconnect 会使
+    # sess_client.receive_response() 抛异常 → stream yield error 退出 → 释放 lock，
+    # 避免 DELETE 等待整个 Agent 响应（可能数十秒）。
+    entry = sessions.pop(sid, None)
+    if entry is not None:
+        try:
+            await entry.client.disconnect()
+        except Exception:
+            pass
+    # 再持锁删 JSONL：等 /chat stream（若在跑）退出后删文件，防止 stream 在 disconnect
+    # 收尾期间再 append 事件重建已删文件。
     async with lock:
-        # 断开常驻 client 若存在
-        entry = sessions.pop(sid, None)
-        if entry is not None:
-            try:
-                await entry.client.disconnect()
-            except Exception:
-                pass
         sessions_store.delete_session(BASE_DIR, sid)
     return JSONResponse({"ok": True})
 

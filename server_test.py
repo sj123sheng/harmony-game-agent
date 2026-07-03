@@ -333,6 +333,11 @@ def test_new_session_emits_session_started_and_writes_jsonl():
             evs = sessions_store.load_events(tmp, sid)
             assert len(evs) >= 2
             assert evs[0][0] == "session_started"
+            # user 事件：次条 SSE，含 prompt，供回放显示每轮用户消息
+            assert events[1][0] == "user", events
+            assert events[1][1]["prompt"] == "生成角色属性系统"
+            # JSONL 也持久化了 user 事件
+            assert any(e[0] == "user" for e in evs), evs
         finally:
             server.BASE_DIR = orig_base
             server.ClaudeSDKClient = orig
@@ -514,6 +519,40 @@ def test_delete_session_idempotent():
     print("[OK] test_delete_session_idempotent")
 
 
+class _DisconnectFake:
+    """追踪 disconnect 调用次数的桩，用于测 DELETE 先断 client 再删文件。"""
+    def __init__(self):
+        self.disconnect_calls = 0
+    async def disconnect(self):
+        self.disconnect_calls += 1
+
+
+def test_delete_disconnects_client_before_deleting_file():
+    """DELETE /sessions/<id>：sessions dict 有 entry 时先 disconnect（不持锁）再删 JSONL。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        orig_base = _patch_base_dir(tmp)
+        fake_client = _DisconnectFake()
+        sid = "b" * 32
+        # 预置：sessions dict 有 entry + JSONL 有事件
+        server.sessions[sid] = server.ClientEntry(
+            client=fake_client, last_used=0.0, title="t", created_at="x"
+        )
+        sessions_store.append_event(tmp, sid, "session_started", {"session_id": sid, "title": "t", "created_at": "x"})
+        try:
+            tc = TestClient(server.app)
+            resp = tc.delete(f"/sessions/{sid}")
+            assert resp.status_code == 200
+            assert fake_client.disconnect_calls == 1, "应 disconnect 常驻 client"
+            assert sid not in server.sessions, "应从 sessions dict 移除"
+            assert sessions_store.load_events(tmp, sid) == [], "应删 JSONL"
+        finally:
+            server.BASE_DIR = orig_base
+            server.sessions.clear()
+    print("[OK] test_delete_disconnects_client_before_deleting_file")
+
+
 class _ConnectRaisingFake:
     """connect 永远 raise 的桩，用于模拟 resume 失败。"""
 
@@ -665,6 +704,7 @@ def main():
     test_session_events_not_found_404()
     test_session_events_illegal_id_400()
     test_delete_session_idempotent()
+    test_delete_disconnects_client_before_deleting_file()
     print("\n全部通过。")
 
 
