@@ -514,6 +514,75 @@ def test_delete_session_idempotent():
     print("[OK] test_delete_session_idempotent")
 
 
+class _ConnectRaisingFake:
+    """connect 永远 raise 的桩，用于模拟 resume 失败。"""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    async def connect(self, prompt=None):
+        raise self._exc
+
+    async def disconnect(self):
+        pass
+
+
+def test_resume_failure_degrades_to_new_session():
+    """resume 失败（connect raise）→ 降级新建：SSE 首条 session_started，次条 error；
+    JSONL 首行 session_started；sessions 含新 sid 的 ClientEntry；新 sid 为 32 hex。"""
+    import re as _re
+    import tempfile
+    from claude_agent_sdk import AssistantMessage, TextBlock
+
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        orig_base = _patch_base_dir(tmp)
+        old_sid = "b" * 32
+        # 先准备一个旧会话的 JSONL，让 _get_or_create_client 走 resume 路径
+        sessions_store.append_event(tmp, old_sid, "session_started",
+                                    {"session_id": old_sid, "title": "旧", "created_at": "x"})
+        # 第一次工厂调用（resume 路径）返回 connect 抛异常的桩；
+        # 第二次（降级新建）返回正常 _FakeClient
+        good_fake = _FakeClient([AssistantMessage(content=[TextBlock(text="hi")], model="test"), _result_msg()])
+        call_count = {"n": 0}
+
+        def _factory(options=None):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return _ConnectRaisingFake(RuntimeError("resume boom"))
+            return good_fake
+
+        orig = _patch_sdk_client(_factory)
+        try:
+            tc = TestClient(server.app)
+            resp = tc.post("/chat", json={"prompt": "继续", "session_id": old_sid})
+            assert resp.status_code == 200, resp.text
+            events = _parse_sse(resp.text)
+            # 首条必须是 session_started（不是 error）
+            assert events[0][0] == "session_started", f"首条应为 session_started，实际: {events[0]}"
+            new_sid = events[0][1]["session_id"]
+            assert new_sid != old_sid, "降级应生成新 sid"
+            assert _re.match(r"^[a-f0-9]{32}$", new_sid), f"新 sid 非 32 hex: {new_sid}"
+            assert events[0][1]["title"] == "继续"
+            # 次条应为 error
+            assert events[1][0] == "error", f"次条应为 error，实际: {events[1]}"
+            assert "resume boom" in events[1][1]["message"]
+            # JSONL 首行是 session_started
+            evs = sessions_store.load_events(tmp, new_sid)
+            assert len(evs) >= 2
+            assert evs[0][0] == "session_started", f"JSONL 首行应为 session_started，实际: {evs[0]}"
+            assert evs[1][0] == "error"
+            # sessions dict 含新 sid 的 ClientEntry
+            assert new_sid in server.sessions
+            # 旧 sid 不在 sessions（resume 失败未注册）
+            assert old_sid not in server.sessions
+        finally:
+            server.BASE_DIR = orig_base
+            server.ClaudeSDKClient = orig
+            server.sessions.clear()
+    print("[OK] test_resume_failure_degrades_to_new_session")
+
+
 def main():
     test_export_single_file_ets()
     test_export_single_file_json()
@@ -528,6 +597,7 @@ def main():
     test_new_session_emits_session_started_and_writes_jsonl()
     test_resume_existing_session_reuses_client()
     test_resumed_session_after_eviction_rebuilds_via_resume()
+    test_resume_failure_degrades_to_new_session()
     test_sessions_list_empty()
     test_sessions_list_after_chat()
     test_session_events_returns_json()

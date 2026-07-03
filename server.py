@@ -141,16 +141,22 @@ async def chat(request: Request):
             try:
                 sid, sess_client, is_new = await _get_or_create_client(prompt, session_id)
             except Exception as e:
-                # resume 失败降级新建 + error 提示
+                # resume 失败降级新建：先注册新 session + 发 session_started，再发提示性 error。
+                # 顺序保证 JSONL 首行是 session_started（spec 要求），前端先拿到新 sid 再看到 error。
                 options = build_options()
                 sid = uuid.uuid4().hex
+                title = (prompt[:40] + "…") if len(prompt) > 40 else prompt
+                created_at = _now_iso()
+                sess_client = ClaudeSDKClient(options=options)
+                await sess_client.connect()
+                sessions[sid] = ClientEntry(client=sess_client, last_used=time.monotonic(), title=title, created_at=created_at)
+                started = {"session_id": sid, "title": title, "created_at": created_at}
+                yield _sse("session_started", started)
+                sessions_store.append_event(BASE_DIR, sid, "session_started", started)
                 err_msg = f"历史会话不可续，已开新会话：{e}"
                 yield _sse("error", {"message": err_msg})
                 sessions_store.append_event(BASE_DIR, sid, "error", {"message": err_msg})
-                sess_client = ClaudeSDKClient(options=options)
-                await sess_client.connect()
-                is_new = True
-                sessions[sid] = ClientEntry(client=sess_client, last_used=time.monotonic(), title=(prompt[:40] + "…" if len(prompt) > 40 else prompt), created_at=_now_iso())
+                is_new = False  # 已在上面发过 session_started，跳过下方重复发送
             pending_writes: dict[str, dict] = {}
             title = (prompt[:40] + "…") if len(prompt) > 40 else prompt
             if is_new:

@@ -587,6 +587,7 @@ async function switchSession(sid) {
 function replayEvents(events) {
   // 回放：首条 session_started 设 currentSessionId 不渲染；done/error 跳过；
   // 其余按回合组织——首条非 session_started 事件前开一回合"历史回放"。
+  // 单事件分发异常 try/catch 跳过继续（spec：前端回放渲染异常 单事件 try/catch）。
   let turnStarted = false;
   for (const { event, data } of events) {
     if (event === 'session_started') {
@@ -599,7 +600,11 @@ function replayEvents(events) {
       startTurn('历史回放');
       turnStarted = true;
     }
-    handleEvent(event, data);
+    try {
+      handleEvent(event, data);
+    } catch (e) {
+      console.warn('回放事件渲染失败，跳过：', event, e);
+    }
   }
   if (turnStarted) finalizeBot();
   scrollThread();
