@@ -30,7 +30,7 @@ _DEVECO_PROJECT_SPEC = build_deveco_project_spec([])
 
 
 def _format_files(result: dict) -> str:
-    """把 hybrid_generate 的 {files,error} 格式化成可读文本，供主 Agent 据此 Write。"""
+    """把 hybrid_generate 的 {files,error,findings} 格式化成可读文本，供主 Agent 据此 Write。"""
     parts = []
     if result.get("error"):
         parts.append(f"[注意] {result['error']}")
@@ -38,6 +38,12 @@ def _format_files(result: dict) -> str:
     parts.append(f"已生成 {len(files)} 个文件（请用 Write 写入 ./generated/ 下对应路径）：")
     for f in files:
         parts.append(f"\n=== {f['path']} ===\n{f['content']}")
+    # 审查闭环产出的 findings（供主 Agent 决策与前端 findings 卡片渲染）
+    findings = result.get("findings") or []
+    if findings:
+        parts.append(f"\n[审查发现 {len(findings)} 项]")
+        for f in findings:
+            parts.append(f"- [{f.get('severity','?')}] {f.get('file','')}: {f.get('summary','')}（改法：{f.get('fix','')}）")
     return "\n".join(parts)
 
 

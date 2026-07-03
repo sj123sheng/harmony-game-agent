@@ -66,3 +66,17 @@
 - `sessions_store.py`：纯 IO 模块（append/load/list/delete + 路径穿越与 id 正则双防护）
 - 续聊：常驻 client 直接 `query(prompt, session_id)`；被 LRU 回收后 `ClaudeSDKClient(options/resume=id)` 重建；resume 失败降级新建 + 提示
 - 首句标题（前 40 字），LLM 摘要留未来
+
+## [v1.2.0] - 2026-07-03
+
+### Phase 6：生成代码质量优化
+
+- 模板硬伤修复：4 个 generator 跨文件 import 显式化、去重复 @Entry、嵌套状态改 V1 @Observed/@ObjectLink（修属性面板不刷新）
+- DevEco 脚手架补 entry/oh-package.json5、AppScope resources、minAPIVersion、signingConfig 一致性
+- framework.hybrid_generate 加自动审查闭环：LLM 填充后调 review_arkts_code 审查，高/中 severity findings 喂回 LLM 重试 1 次
+- 生成返回 findings 字段，复用前端既有 findings 卡片渲染
+- review_arkts_code system_prompt 提取为 analyzers/review_prompt.py 共享常量（生成期与用户审查同一 checklist）
+
+### 已知边界追加
+
+- DevEco 图标占位（$media:app_icon）需用户自行替换真实 PNG
