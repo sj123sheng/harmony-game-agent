@@ -62,14 +62,14 @@ def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _sweep_lru() -> None:
+async def _sweep_lru() -> None:
     """在 lock 内调用：回收闲置超时或超量的 client（JSONL 保留）。"""
     now = time.monotonic()
     # 闲置超时
     for sid, entry in list(sessions.items()):
         if now - entry.last_used > LRU_IDLE_SECS:
             try:
-                asyncio.get_event_loop().create_task(entry.client.disconnect())
+                await entry.client.disconnect()
             except Exception:
                 pass
             sessions.pop(sid, None)
@@ -78,14 +78,14 @@ def _sweep_lru() -> None:
         sid = min(sessions, key=lambda k: sessions[k].last_used)
         entry = sessions.pop(sid)
         try:
-            asyncio.get_event_loop().create_task(entry.client.disconnect())
+            await entry.client.disconnect()
         except Exception:
             pass
 
 
 async def _get_or_create_client(prompt: str, session_id: str | None) -> tuple[str, ClaudeSDKClient, bool]:
     """返回 (sid, client, is_new)。sid=None → 新建 UUID；非空但 sessions 无 → resume 重建。"""
-    _sweep_lru()
+    await _sweep_lru()
     if session_id and session_id in sessions:
         entry = sessions[session_id]
         entry.last_used = time.monotonic()
@@ -141,9 +141,11 @@ async def chat(request: Request):
                 sid, sess_client, is_new = await _get_or_create_client(prompt, session_id)
             except Exception as e:
                 # resume 失败降级新建 + error 提示
-                yield _sse("error", {"message": f"历史会话不可续，已开新会话：{e}"})
                 options = build_options()
                 sid = uuid.uuid4().hex
+                err_msg = f"历史会话不可续，已开新会话：{e}"
+                yield _sse("error", {"message": err_msg})
+                sessions_store.append_event(BASE_DIR, sid, "error", {"message": err_msg})
                 sess_client = ClaudeSDKClient(options=options)
                 await sess_client.connect()
                 is_new = True
