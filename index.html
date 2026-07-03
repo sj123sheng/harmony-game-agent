@@ -80,6 +80,23 @@
   .rail-meta b { color: var(--muted); font-weight: 500; }
   .rail-meta .dot-ok { color: var(--ok); }
 
+  .rail-sessions { border-bottom: 1px solid var(--line); padding: 10px 12px; }
+  .rail-sessions-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .rail-sessions-head .rs-label { font-family: var(--font-mono); font-size: 11px; color: var(--muted-2); text-transform: uppercase; letter-spacing: .08em; }
+  .rs-new { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 2px 9px; cursor: pointer; font-size: 14px; line-height: 1; transition: all .2s; }
+  .rs-new:hover { color: var(--accent); border-color: var(--accent); }
+  .rs-new:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .rail-sessions-list { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+  .rs-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 7px; cursor: pointer; border-left: 2px solid transparent; transition: all .2s; }
+  .rs-item:hover { background: var(--surface); }
+  .rs-item.active { background: var(--surface); border-left-color: var(--accent); }
+  .rs-item .rs-title { flex: 1; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rs-item.active .rs-title { color: var(--text); }
+  .rs-item .rs-del { opacity: 0; background: none; border: none; color: var(--muted-2); cursor: pointer; font-size: 13px; padding: 0 2px; }
+  .rs-item:hover .rs-del, .rs-item:focus-within .rs-del { opacity: 1; }
+  .rs-item .rs-del:hover { color: var(--err); }
+  .rs-empty { font-size: 11px; color: var(--muted-2); padding: 4px 8px; }
+
   .rail-body {
     flex: 1; overflow-y: auto;
     padding: 16px 0 24px;
@@ -382,6 +399,13 @@
         输出 <b>./generated/</b>
       </div>
     </div>
+    <div class="rail-sessions">
+      <div class="rail-sessions-head">
+        <span class="rs-label">会话</span>
+        <button class="rs-new" id="newSessionBtn" title="新会话">＋</button>
+      </div>
+      <div class="rail-sessions-list" id="sessionsList"></div>
+    </div>
     <div class="rail-body" id="rail">
       <div class="rail-empty" id="railEmpty">轨迹轨：每个回合的工具调用链会按顺序点亮在这里。</div>
     </div>
@@ -442,6 +466,9 @@ let turnNo = 0;
 let currentGroup = null;
 let pendingNode = null;
 let textOpen = false;
+let currentSessionId = null;
+const sessionsListEl = document.getElementById('sessionsList');
+const newSessionBtn = document.getElementById('newSessionBtn');
 
 const TOOL_LABELS = {
   'mcp__harmony_tools__generate_character_stats': '生成角色属性',
@@ -470,6 +497,104 @@ function shortToolName(full) {
 
 function scrollThread() { threadEl.scrollTop = threadEl.scrollHeight; }
 function scrollRail() { railEl.scrollTop = railEl.scrollHeight; railEl.scrollLeft = railEl.scrollWidth; }
+
+// ── 会话列表 ──
+async function loadSessions() {
+  try {
+    const resp = await fetch('/sessions');
+    if (!resp.ok) return;
+    const items = await resp.json();
+    renderSessionsList(items);
+  } catch (e) { /* 静默 */ }
+}
+
+function renderSessionsList(items) {
+  sessionsListEl.innerHTML = '';
+  if (!items.length) {
+    sessionsListEl.innerHTML = '<div class="rs-empty">尚无会话</div>';
+    return;
+  }
+  for (const it of items) {
+    const div = document.createElement('div');
+    div.className = 'rs-item' + (it.id === currentSessionId ? ' active' : '');
+    const title = document.createElement('span');
+    title.className = 'rs-title';
+    title.textContent = it.title || '(无标题)';
+    title.title = it.title || '';
+    const del = document.createElement('button');
+    del.className = 'rs-del';
+    del.textContent = '✕';
+    del.title = '删除会话';
+    del.setAttribute('aria-label', '删除会话');
+    del.addEventListener('click', (e) => { e.stopPropagation(); deleteSession(it.id); });
+    div.appendChild(title);
+    div.appendChild(del);
+    div.addEventListener('click', () => switchSession(it.id));
+    sessionsListEl.appendChild(div);
+  }
+}
+
+async function deleteSession(sid) {
+  if (!confirm('删除该会话？历史卡片将无法回看。')) return;
+  await fetch(`/sessions/${sid}`, { method: 'DELETE' });
+  if (sid === currentSessionId) {
+    clearAll();
+    currentSessionId = null;
+  }
+  loadSessions();
+}
+
+function clearAll() {
+  messagesEl.innerHTML = '';
+  railEl.innerHTML = '<div class="rail-empty" id="railEmpty">轨迹轨：每个回合的工具调用链会按顺序点亮在这里。</div>';
+  turnNo = 0; currentGroup = null; pendingNode = null; currentBot = null;
+}
+
+function newSession() {
+  if (busy) return;
+  clearAll();
+  currentSessionId = null;
+  inputEl.focus();
+  loadSessions();
+}
+
+async function switchSession(sid) {
+  if (busy) return;
+  if (sid === currentSessionId) return;
+  clearAll();
+  try {
+    const resp = await fetch(`/sessions/${sid}/events`);
+    if (!resp.ok) { addErrorBar('加载会话失败'); return; }
+    const data = await resp.json();
+    currentSessionId = sid;
+    replayEvents(data.events || []);
+    loadSessions();
+  } catch (e) {
+    addErrorBar(String(e));
+  }
+}
+
+function replayEvents(events) {
+  // 回放：首条 session_started 设 currentSessionId 不渲染；done/error 跳过；
+  // 其余按回合组织——首条非 session_started 事件前开一回合"历史回放"。
+  let turnStarted = false;
+  for (const { event, data } of events) {
+    if (event === 'session_started') {
+      currentSessionId = data.session_id;
+      continue;
+    }
+    if (event === 'done' || event === 'error') continue;
+    if (!turnStarted) {
+      hideEmpty();
+      startTurn('历史回放');
+      turnStarted = true;
+    }
+    handleEvent(event, data);
+  }
+  if (turnStarted) finalizeBot();
+  scrollThread();
+  scrollRail();
+}
 
 function hideEmpty() { if (emptyState && emptyState.parentNode) emptyState.remove(); }
 
@@ -729,6 +854,10 @@ function parseSSE(raw) {
 
 function handleEvent(event, data) {
   switch (event) {
+    case 'session_started':
+      currentSessionId = data.session_id;
+      loadSessions();
+      break;
     case 'text':
       removeTyping();
       appendText(data.text || '');
@@ -792,7 +921,7 @@ async function send(prompt) {
     const resp = await fetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, session_id: currentSessionId }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
@@ -840,11 +969,11 @@ document.querySelectorAll('.hint').forEach(h => {
 
 clearBtn.addEventListener('click', () => {
   if (busy) return;
-  messagesEl.innerHTML = '';
-  railEl.innerHTML = '';
-  turnNo = 0; currentGroup = null; pendingNode = null; currentBot = null;
+  clearAll();
+  currentSessionId = null;
   inputEl.focus();
 });
+newSessionBtn.addEventListener('click', newSession);
 
 function autoGrow() {
   inputEl.style.height = 'auto';
@@ -852,6 +981,7 @@ function autoGrow() {
 }
 inputEl.addEventListener('input', autoGrow);
 inputEl.focus();
+loadSessions();
 </script>
 </body>
 </html>
