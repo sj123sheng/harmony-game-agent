@@ -15,6 +15,11 @@ def test_template_structure():
     assert "@Entry" not in panel_tmpl, "面板组件不是页面入口，去 @Entry"
     # 面板显式 import 数据类
     assert "import { CharacterStats } from './CharacterStats'" in panel_tmpl
+    # initial_stats 占位符位于 constructor 内（避免字段重复声明 / 字段区裸赋值）
+    assert "constructor()" in stats_tmpl, "需有 constructor() 供 LLM 填入字段赋值"
+    assert "__LLM:initial_stats__" in stats_tmpl, "占位符仍在模板中"
+    # @ObjectLink 字段不应在声明处初始化
+    assert "= new CharacterStats" not in panel_tmpl, "@ObjectLink 字段不得在声明处初始化"
     print("[OK] test_template_structure")
 
 def main():

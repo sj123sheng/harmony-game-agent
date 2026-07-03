@@ -18,7 +18,9 @@ export class CharacterStats {
   critRate: number = 0      // 暴击率 [0,1]
   speed: number = 0         // 行动速度
 
-  __LLM:initial_stats__
+  constructor() {
+    __LLM:initial_stats__
+  }
 
   // 升到下一级所需经验
   expToNext(level: number): number {
@@ -94,7 +96,7 @@ def build_character_stats_spec() -> GeneratorSpec:
         fill_instruction=(
             "为一个鸿蒙 ArkTS 角色属性系统填充细节。"
             "按骨架顶部注释中体现的流派倾向给数值（战士偏血量与防御，法师偏攻击与暴击，刺客偏速度与暴击）。"
-            "initial_stats 填属性初始化（maxHp/currentHp/atk/def/critRate/speed 的初始数值赋值）；"
+            "initial_stats 填 constructor 内对字段的赋值语句（如 this.maxHp = 100; this.atk = 20 等，按流派倾向给数值，不要重复字段声明）；"
             "growth_formula 填 expToNext 的返回表达式（按 level 计算）；"
             "levelup_logic 填 onLevelUp 内的属性提升语句；"
             "panel_layout 填 StatsPanel build() 内展示各属性的 Text/Row 组件，"
