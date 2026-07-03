@@ -37,7 +37,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from analyzers.findings import parse_findings
+from analyzers.findings import _normalize_finding, parse_findings
 from main import _raw_tool_result_text, build_options
 import sessions_store
 
@@ -106,6 +106,37 @@ async def _get_or_create_client(prompt: str, session_id: str | None) -> tuple[st
 def _sse(event: str, data: dict) -> str:
     """格式化一条 SSE 事件。"""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+# 生成工具 _format_files 用 marker 包裹的 JSON findings 段标记
+_FINDINGS_MARKER_RE = re.compile(
+    r"%%FINDINGS_JSON%%\n(.*?)\n%%END_FINDINGS%%", re.DOTALL
+)
+
+
+def _extract_marker_findings(raw: str) -> tuple[list[dict] | None, str]:
+    """从 _format_files 输出提取 marker 包裹的 JSON findings 段。
+
+    返回 (findings, remaining_text)。无 marker 返回 (None, raw)。
+    findings 段解析失败也返回 (None, raw)，由调用方走 parse_findings 回退。
+    """
+    if not raw or "%%FINDINGS_JSON%%" not in raw:
+        return None, raw
+    m = _FINDINGS_MARKER_RE.search(raw)
+    if not m:
+        return None, raw
+    json_str = m.group(1)
+    try:
+        data = json.loads(json_str)
+    except (json.JSONDecodeError, TypeError):
+        return None, raw
+    if not isinstance(data, list) or not all(isinstance(x, dict) for x in data):
+        return None, raw
+    # 剩余文本 = marker 之前 + 之后（去掉 marker 段）
+    remaining = raw[:m.start()] + raw[m.end():]
+    # 归一化字段（与 parse_findings 一致）
+    normalized = [_normalize_finding(f) for f in data]
+    return normalized, remaining
 
 
 async def index(_: Request) -> HTMLResponse:
@@ -190,13 +221,23 @@ async def chat(request: Request):
                                     yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
                                 else:
                                     raw = _raw_tool_result_text(block)
-                                    findings = parse_findings(raw)
-                                    if findings is not None:
-                                        ev = ("findings", {"findings": findings, "is_error": block.is_error})
+                                    # 生成工具的 _format_files 用 marker 包裹 JSON findings 段；
+                                    # 先提取 marker 段解析为 SSE findings 事件，剩余文本转 tool_result。
+                                    marker_findings, remaining = _extract_marker_findings(raw)
+                                    if marker_findings is not None:
+                                        ev = ("findings", {"findings": marker_findings, "is_error": block.is_error})
                                         yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
+                                        if remaining.strip():
+                                            ev = ("tool_result", {"text": remaining, "is_error": block.is_error})
+                                            yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
                                     else:
-                                        ev = ("tool_result", {"text": raw, "is_error": block.is_error})
-                                        yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
+                                        findings = parse_findings(raw)
+                                        if findings is not None:
+                                            ev = ("findings", {"findings": findings, "is_error": block.is_error})
+                                            yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
+                                        else:
+                                            ev = ("tool_result", {"text": raw, "is_error": block.is_error})
+                                            yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)
                     elif isinstance(msg, ResultMessage):
                         ev = ("done", {"is_error": msg.is_error, "cost": msg.total_cost_usd})
                         yield _sse(ev[0], ev[1]); sessions_store.append_event(BASE_DIR, sid, *ev)

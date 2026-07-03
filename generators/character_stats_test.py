@@ -20,6 +20,8 @@ def test_template_structure():
     assert "__LLM:initial_stats__" in stats_tmpl, "占位符仍在模板中"
     # @ObjectLink 字段不应在声明处初始化
     assert "= new CharacterStats" not in panel_tmpl, "@ObjectLink 字段不得在声明处初始化"
+    # I-3: StatsPanel 须 export struct，否则 deveco _extract_exports 不识别、Index.ets 无法 import
+    assert "export struct StatsPanel" in panel_tmpl, "StatsPanel 须 export struct 供跨文件导入"
     print("[OK] test_template_structure")
 
 def main():

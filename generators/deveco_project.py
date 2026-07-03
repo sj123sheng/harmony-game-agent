@@ -401,4 +401,4 @@ async def run_scaffold(args: dict) -> dict:
         {"path": f"{slug}/{f['path']}", "content": f["content"]}
         for f in result["files"]
     ]
-    return {"files": copied + prefixed, "error": result.get("error", "")}
+    return {"files": copied + prefixed, "error": result.get("error", ""), "findings": result.get("findings", [])}

@@ -123,10 +123,11 @@ async def hybrid_generate(spec: GeneratorSpec, args: dict) -> dict:
         skeleton_block = "\n\n".join(
             f"=== 文件 {path} ===\n{skel}" for path, skel in skeletons.items()
         )
+        # fill_instruction 只拼接一次；extra_hint 为空时省略，避免重复
+        hint_part = f"{extra_hint}\n\n" if extra_hint else ""
         user_prompt = (
             f"{spec.fill_instruction}\n\n"
-            f"{extra_hint}\n\n" if extra_hint else f"{spec.fill_instruction}\n\n"
-        ) + (
+            f"{hint_part}"
             f"以下是需要填充的骨架（__LLM:名字__ 为待填占位符）：\n\n"
             f"{skeleton_block}\n\n需要填充的占位符清单：\n{slot_list}\n\n"
             f"请输出 JSON：键为文件路径，值为 {{占位符名: 填充代码}}。"

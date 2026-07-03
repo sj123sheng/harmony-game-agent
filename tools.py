@@ -7,6 +7,8 @@
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+import json
+
 from analyzers import (
     analyze_runtime_logs,
     check_api_usage,
@@ -30,7 +32,11 @@ _DEVECO_PROJECT_SPEC = build_deveco_project_spec([])
 
 
 def _format_files(result: dict) -> str:
-    """把 hybrid_generate 的 {files,error,findings} 格式化成可读文本，供主 Agent 据此 Write。"""
+    """把 hybrid_generate 的 {files,error,findings} 格式化成可读文本，供主 Agent 据此 Write。
+
+    findings 段用 marker 包裹的 JSON 数组附加在末尾，供 server.py stream() 提取
+    转为 SSE findings 事件（前端渲染卡片）。marker 外的文本作为 tool_result 文本展示。
+    """
     parts = []
     if result.get("error"):
         parts.append(f"[注意] {result['error']}")
@@ -38,12 +44,10 @@ def _format_files(result: dict) -> str:
     parts.append(f"已生成 {len(files)} 个文件（请用 Write 写入 ./generated/ 下对应路径）：")
     for f in files:
         parts.append(f"\n=== {f['path']} ===\n{f['content']}")
-    # 审查闭环产出的 findings（供主 Agent 决策与前端 findings 卡片渲染）
+    # 审查闭环产出的 findings：用 marker 包裹 JSON 数组，供 server.py 提取
     findings = result.get("findings") or []
     if findings:
-        parts.append(f"\n[审查发现 {len(findings)} 项]")
-        for f in findings:
-            parts.append(f"- [{f.get('severity','?')}] {f.get('file','')}: {f.get('summary','')}（改法：{f.get('fix','')}）")
+        parts.append(f"\n%%FINDINGS_JSON%%\n{json.dumps(findings, ensure_ascii=False)}\n%%END_FINDINGS%%")
     return "\n".join(parts)
 
 

@@ -89,7 +89,7 @@ _INVENTORY_UI_TEMPLATE = """// 背包 UI - 子组件
 import { Inventory } from './Inventory'
 
 @Component
-struct InventoryUI {
+export struct InventoryUI {
   @ObjectLink bag: Inventory
 
   build() {

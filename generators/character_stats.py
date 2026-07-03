@@ -49,7 +49,7 @@ _STATS_PANEL_TEMPLATE = """// 角色属性面板 UI - __ARG:character_name__
 import { CharacterStats } from './CharacterStats'
 
 @Component
-struct StatsPanel {
+export struct StatsPanel {
   @ObjectLink stats: CharacterStats
 
   build() {

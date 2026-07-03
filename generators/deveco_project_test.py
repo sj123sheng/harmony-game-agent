@@ -493,6 +493,32 @@ def test_run_scaffold_llm_failure_degrades_index():
     print("[OK] test_run_scaffold_llm_failure_degrades_index")
 
 
+def test_run_scaffold_passes_through_findings():
+    """I-2: run_scaffold 返回值须透传 hybrid_generate 的 findings 字段。"""
+    with tempfile.TemporaryDirectory() as d:
+        orig, afw_orig, fake = _patch_fake(
+            '{"entry/src/main/ets/pages/Index.ets": {"demo_body": "// demo"}}'
+        )
+        # 覆盖审查桩：返回 1 条 finding，验证透传
+        import analyzers.framework as afw
+        review_payload = '[{"severity":"高","location":"Index.ets","summary":"test","fix":"fix","category":"测试"}]'
+        afw.AsyncAnthropic = lambda *a, **k: _FakeAnthropic(review_payload)
+        try:
+            result = asyncio.run(run_scaffold({
+                "project_name": "rpgdemo",
+                "scan_dir": d,
+            }))
+        finally:
+            import generators.framework as fw
+            fw.AsyncAnthropic = orig
+            afw.AsyncAnthropic = afw_orig
+    # I-2: findings 须透传（_review_files 对每个文件调一次审查，桩对每次都返回同一条）
+    assert "findings" in result, "run_scaffold 返回值缺 findings 字段"
+    assert len(result["findings"]) >= 1, result["findings"]
+    assert result["findings"][0]["summary"] == "test"
+    print("[OK] test_run_scaffold_passes_through_findings")
+
+
 def main():
     test_extract_exports_struct_class_const_enum()
     test_extract_exports_empty_when_none()
@@ -531,6 +557,7 @@ def main():
     test_run_scaffold_copies_subsystem_files_with_project_prefix()
     test_run_scaffold_empty_scan_dir_still_produces_skeleton()
     test_run_scaffold_llm_failure_degrades_index()
+    test_run_scaffold_passes_through_findings()
     print("\n全部通过。")
 
 

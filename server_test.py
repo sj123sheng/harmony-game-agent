@@ -592,6 +592,56 @@ def test_resume_failure_degrades_to_new_session():
     print("[OK] test_resume_failure_degrades_to_new_session")
 
 
+def test_stream_findings_marker_from_generator_tool_result():
+    """I-1 端到端：生成工具返回的 _format_files 文本含 %%FINDINGS_JSON%% marker
+    → server stream() 提取 marker 段发 findings 事件，剩余文本发 tool_result 事件。"""
+    from claude_agent_sdk import AssistantMessage, UserMessage, ToolUseBlock, ToolResultBlock
+
+    # 模拟 _format_files 输出：文件内容 + marker 包裹的 JSON findings
+    import json as _json
+    findings_list = [{"severity": "高", "file": "x/A.ets", "summary": "问题A", "fix": "改法A"}]
+    mixed_text = (
+        "已生成 1 个文件：\n\n=== x/A.ets ===\nexport struct A {}\n"
+        f"\n%%FINDINGS_JSON%%\n{_json.dumps(findings_list, ensure_ascii=False)}\n%%END_FINDINGS%%"
+    )
+    fake = _FakeClient([
+        AssistantMessage(content=[ToolUseBlock(
+            id="g1", name="generate_character_stats", input={},
+        )], model="test"),
+        UserMessage(content=[ToolResultBlock(
+            tool_use_id="g1",
+            content=[{"type": "text", "text": mixed_text}],
+            is_error=False,
+        )]),
+    ])
+    orig = _patch_sdk_client(lambda options=None: fake)
+    try:
+        tc = TestClient(server.app)
+        resp = tc.post("/chat", json={"prompt": "x"})
+        assert resp.status_code == 200
+        events = _parse_sse(resp.text)
+        kinds = [e for e, _ in events]
+        # 须发 findings 事件（从 marker 段提取）
+        assert "findings" in kinds, f"缺少 findings 事件，实际: {kinds}"
+        idx = kinds.index("findings")
+        data = events[idx][1]
+        assert isinstance(data["findings"], list)
+        assert len(data["findings"]) == 1
+        f = data["findings"][0]
+        assert f["severity"] == "高"
+        assert f["summary"] == "问题A"
+        # 须发 tool_result 事件（剩余文本）
+        assert "tool_result" in kinds, f"缺少 tool_result 事件，实际: {kinds}"
+        tr_idx = kinds.index("tool_result")
+        tr_data = events[tr_idx][1]
+        assert "已生成 1 个文件" in tr_data["text"]
+        assert "%%FINDINGS_JSON%%" not in tr_data["text"]
+    finally:
+        server.ClaudeSDKClient = orig
+        server.sessions.clear()
+    print("[OK] test_stream_findings_marker_from_generator_tool_result")
+
+
 def main():
     test_export_single_file_ets()
     test_export_single_file_json()
@@ -603,6 +653,7 @@ def main():
     test_stream_file_event_for_write()
     test_stream_findings_event_for_json_result()
     test_stream_tool_result_fallback_for_plain_text()
+    test_stream_findings_marker_from_generator_tool_result()
     test_new_session_emits_session_started_and_writes_jsonl()
     test_resume_existing_session_reuses_client()
     test_resumed_session_after_eviction_rebuilds_via_resume()

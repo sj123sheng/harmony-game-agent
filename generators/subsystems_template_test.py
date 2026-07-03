@@ -67,6 +67,9 @@ def test_inventory_template():
     # File 3: InventoryUI.ets — UI 面板
     _assert_panel(spec.files[3].template, "InventoryUI",
                   "import { Inventory } from './Inventory'")
+    # I-3: InventoryUI 须 export struct，否则 deveco _extract_exports 不识别
+    assert "export struct InventoryUI" in spec.files[3].template, \
+        "InventoryUI 须 export struct 供跨文件导入"
     print("[OK] test_inventory_template")
 
 
