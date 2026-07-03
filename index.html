@@ -452,7 +452,7 @@
 const messagesEl = document.getElementById('messages');
 const threadEl = document.getElementById('thread');
 const railEl = document.getElementById('rail');
-const railEmpty = document.getElementById('railEmpty');
+let railEmpty = document.getElementById('railEmpty');
 const emptyState = document.getElementById('emptyState');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('send');
@@ -536,18 +536,25 @@ function renderSessionsList(items) {
 
 async function deleteSession(sid) {
   if (!confirm('删除该会话？历史卡片将无法回看。')) return;
-  await fetch(`/sessions/${sid}`, { method: 'DELETE' });
-  if (sid === currentSessionId) {
-    clearAll();
-    currentSessionId = null;
+  try {
+    const resp = await fetch(`/sessions/${sid}`, { method: 'DELETE' });
+    if (!resp.ok) { addErrorBar('删除会话失败（HTTP ' + resp.status + '）'); return; }
+    if (sid === currentSessionId) {
+      clearAll();
+      currentSessionId = null;
+    }
+    loadSessions();
+  } catch (e) {
+    addErrorBar('删除会话失败：' + String(e));
   }
-  loadSessions();
 }
 
 function clearAll() {
   messagesEl.innerHTML = '';
   railEl.innerHTML = '<div class="rail-empty" id="railEmpty">轨迹轨：每个回合的工具调用链会按顺序点亮在这里。</div>';
-  turnNo = 0; currentGroup = null; pendingNode = null; currentBot = null;
+  // 重建 DOM 后更新全局引用，否则 railEmpty 仍指向被移除的旧节点
+  railEmpty = document.getElementById('railEmpty');
+  turnNo = 0; currentGroup = null; pendingNode = null; currentBot = null; textOpen = false;
 }
 
 function newSession() {
@@ -561,6 +568,7 @@ function newSession() {
 async function switchSession(sid) {
   if (busy) return;
   if (sid === currentSessionId) return;
+  busy = true; // 防止 fetch 返回前用户穿插发送消息
   clearAll();
   try {
     const resp = await fetch(`/sessions/${sid}/events`);
@@ -571,6 +579,8 @@ async function switchSession(sid) {
     loadSessions();
   } catch (e) {
     addErrorBar(String(e));
+  } finally {
+    busy = false;
   }
 }
 
