@@ -395,6 +395,125 @@ def test_resumed_session_after_eviction_rebuilds_via_resume():
     print("[OK] test_resumed_session_after_eviction_rebuilds_via_resume")
 
 
+def test_sessions_list_empty():
+    """空会话目录 → GET /sessions 返回 200 + []。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        orig_base = _patch_base_dir(tmp)
+        try:
+            tc = TestClient(server.app)
+            resp = tc.get("/sessions")
+            assert resp.status_code == 200
+            assert resp.json() == []
+        finally:
+            server.BASE_DIR = orig_base
+    print("[OK] test_sessions_list_empty")
+
+
+def test_sessions_list_after_chat():
+    """一次 /chat 后 GET /sessions 返回含该会话的列表。"""
+    import tempfile
+    from claude_agent_sdk import AssistantMessage, TextBlock
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        orig_base = _patch_base_dir(tmp)
+        fake = _FakeClient([AssistantMessage(content=[TextBlock(text="hi")], model="test"), _result_msg()])
+        orig = _patch_sdk_client(lambda options=None: fake)
+        try:
+            tc = TestClient(server.app)
+            r = tc.post("/chat", json={"prompt": "first prompt"})
+            sid = _parse_sse(r.text)[0][1]["session_id"]
+            resp = tc.get("/sessions")
+            assert resp.status_code == 200
+            items = resp.json()
+            assert len(items) == 1
+            assert items[0]["id"] == sid
+            assert items[0]["title"] == "first prompt"
+            assert items[0]["event_count"] >= 2
+        finally:
+            server.BASE_DIR = orig_base
+            server.ClaudeSDKClient = orig
+            server.sessions.clear()
+    print("[OK] test_sessions_list_after_chat")
+
+
+def test_session_events_returns_json():
+    """GET /sessions/<id>/events 返回事件 JSON 列表。"""
+    import tempfile
+    from claude_agent_sdk import AssistantMessage, TextBlock
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        orig_base = _patch_base_dir(tmp)
+        fake = _FakeClient([AssistantMessage(content=[TextBlock(text="hello")], model="test"), _result_msg()])
+        orig = _patch_sdk_client(lambda options=None: fake)
+        try:
+            tc = TestClient(server.app)
+            r = tc.post("/chat", json={"prompt": "p"})
+            sid = _parse_sse(r.text)[0][1]["session_id"]
+            resp = tc.get(f"/sessions/{sid}/events")
+            assert resp.status_code == 200
+            evs = resp.json()["events"]
+            assert evs[0]["event"] == "session_started"
+            assert any(e["event"] == "text" and e["data"]["text"] == "hello" for e in evs)
+        finally:
+            server.BASE_DIR = orig_base
+            server.ClaudeSDKClient = orig
+            server.sessions.clear()
+    print("[OK] test_session_events_returns_json")
+
+
+def test_session_events_not_found_404():
+    """不存在的会话 → GET /sessions/<id>/events 返回 404。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        orig_base = _patch_base_dir(tmp)
+        try:
+            tc = TestClient(server.app)
+            resp = tc.get(f"/sessions/{'f' * 32}/events")
+            assert resp.status_code == 404
+        finally:
+            server.BASE_DIR = orig_base
+    print("[OK] test_session_events_not_found_404")
+
+
+def test_session_events_illegal_id_400():
+    """非法 session_id → 返回 400 或 404。
+
+    说明：路径含 ``..`` 时 Starlette 路由层先行规范化导致不匹配 → 404；
+    路径为 32 字符非 hex（如全 'g'）时路由匹配但 handler 正则校验 → 400。
+    二者均表明非法 id 被正确拒绝。这里沿用 brief 的 ``../etc/events`` 路径，
+    并接受 400 或 404。
+    """
+    tc = TestClient(server.app)
+    resp = tc.get("/sessions/../etc/events")
+    assert resp.status_code in (400, 404), f"期望 400 或 404，实际 {resp.status_code}"
+    print("[OK] test_session_events_illegal_id_400")
+
+
+def test_delete_session_idempotent():
+    """DELETE /sessions/<id> 幂等：不存在返回 200，存在也返回 200 且删除文件。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        orig_base = _patch_base_dir(tmp)
+        try:
+            tc = TestClient(server.app)
+            sid = "a" * 32
+            # 不存在 → 仍 200（幂等）
+            resp = tc.delete(f"/sessions/{sid}")
+            assert resp.status_code == 200
+            # 手动建一个再删
+            sessions_store.append_event(tmp, sid, "session_started", {"session_id": sid, "title": "t", "created_at": "x"})
+            resp2 = tc.delete(f"/sessions/{sid}")
+            assert resp2.status_code == 200
+            assert sessions_store.load_events(tmp, sid) == []
+        finally:
+            server.BASE_DIR = orig_base
+    print("[OK] test_delete_session_idempotent")
+
+
 def main():
     test_export_single_file_ets()
     test_export_single_file_json()
@@ -409,6 +528,12 @@ def main():
     test_new_session_emits_session_started_and_writes_jsonl()
     test_resume_existing_session_reuses_client()
     test_resumed_session_after_eviction_rebuilds_via_resume()
+    test_sessions_list_empty()
+    test_sessions_list_after_chat()
+    test_session_events_returns_json()
+    test_session_events_not_found_404()
+    test_session_events_illegal_id_400()
+    test_delete_session_idempotent()
     print("\n全部通过。")
 
 

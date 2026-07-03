@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -276,10 +277,48 @@ async def export(request: Request):
     )
 
 
+_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
+
+
+async def sessions_list(_: Request) -> JSONResponse:
+    """GET /sessions → 列出全部会话（按 mtime 倒序）。"""
+    return JSONResponse(sessions_store.list_sessions(BASE_DIR))
+
+
+async def session_events(request: Request) -> JSONResponse:
+    """GET /sessions/<id>/events → 返回该会话全部事件 JSON。"""
+    sid = request.path_params["sid"]
+    if not _ID_PATTERN.match(sid):
+        return JSONResponse({"error": "非法 session_id"}, status_code=400)
+    evs = sessions_store.load_events(BASE_DIR, sid)
+    if not evs and not (BASE_DIR / "sessions" / f"{sid}.jsonl").exists():
+        return JSONResponse({"error": "会话不存在"}, status_code=404)
+    return JSONResponse({"events": [{"event": e, "data": d} for e, d in evs]})
+
+
+async def delete_session_handler(request: Request) -> JSONResponse:
+    """DELETE /sessions/<id> → 幂等删除：断开常驻 client + 删 JSONL。"""
+    sid = request.path_params["sid"]
+    if not _ID_PATTERN.match(sid):
+        return JSONResponse({"error": "非法 session_id"}, status_code=400)
+    # 断开常驻 client 若存在
+    entry = sessions.pop(sid, None)
+    if entry is not None:
+        try:
+            await entry.client.disconnect()
+        except Exception:
+            pass
+    sessions_store.delete_session(BASE_DIR, sid)
+    return JSONResponse({"ok": True})
+
+
 routes = [
     Route("/", index),
     Route("/chat", chat, methods=["POST"]),
     Route("/export", export, methods=["GET"]),
+    Route("/sessions", sessions_list, methods=["GET"]),
+    Route("/sessions/{sid}/events", session_events, methods=["GET"]),
+    Route("/sessions/{sid}", delete_session_handler, methods=["DELETE"]),
 ]
 app = Starlette(routes=routes, lifespan=lifespan)
 
