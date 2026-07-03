@@ -14,6 +14,7 @@ from analyzers import (
     suggest_performance_fixes,
 )
 from analyzers.framework import FileRef, analyze_with_context
+from analyzers.review_prompt import REVIEW_SYSTEM_PROMPT
 from generators import (
     build_character_stats_spec,
     build_deveco_project_spec,
@@ -143,19 +144,9 @@ async def scaffold_deveco_project(args):
 )
 async def review_arkts_code(args):
     # 固定的审查者 system prompt + checklist，保证每次审查流程一致、可复现
-    system_prompt = (
-        "你是一名资深 HarmonyOS ArkTS 代码审查专家。对用户给出的 ArkTS 代码进行审查，"
-        "从以下维度逐一检查并报告问题：\n"
-        "1. 组件结构：@Component/@Entry/build() 是否完整、是否符合 ArkTS 组件规范\n"
-        "2. 状态管理：@State/@Prop/@Link 使用是否合理，是否有冗余状态\n"
-        "3. 性能：是否有不必要的重渲染、昂贵操作放在 build() 中\n"
-        "4. ArkTS 规范：命名约定、类型标注、是否用了 console.log（应用 hilog）等\n"
-        "5. 潜在 bug：空指针、资源未释放、事件未解绑等\n"
-        "请输出一个 JSON 数组（不要 markdown 代码块标记、不要任何解释文字），"
-        "每个元素含字段：severity（高/中/低）、location（文件:行或组件名）、"
-        "summary（一句话问题）、fix（改法）、category（审查维度：组件结构/状态管理/性能/ArkTS规范/潜在bug）。"
-        "若无任何发现，返回 []。"
-    )
+    # 提取为 analyzers.review_prompt.REVIEW_SYSTEM_PROMPT 共享常量，
+    # 供 generators.framework 审查闭环复用同一 checklist。
+    system_prompt = REVIEW_SYSTEM_PROMPT
     # A1 路径：把贴入代码包成 FileRef，走共享 analyze_with_context，
     # 与其余 4 个分析工具共用 LLM 调用/截断/兜底逻辑。
     files = [FileRef(path="<贴入代码>", content=args["code"])]
