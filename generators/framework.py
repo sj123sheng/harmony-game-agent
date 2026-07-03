@@ -190,12 +190,14 @@ async def hybrid_generate(spec: GeneratorSpec, args: dict) -> dict:
                 fills2, _ = await _fill(skeletons, hint)
                 if fills2:
                     files_out = _backfill(skeletons, fills2)
-                    # 二次审查（只收集，不再重试）；保留全部历史 findings
+                    # 二次审查（只收集，不再重试）；覆盖第一次的 findings——
+                    # 修正后的 files 不应再带已修正的旧 findings（覆盖语义）。
+                    # 二次审查失败（raise）时不覆盖，all_findings 保持第一次的。
                     try:
                         second = await _review_files(files_out)
-                        all_findings.extend(second)
+                        all_findings = list(second)
                     except Exception:
-                        pass  # 二次审查失败不阻断
+                        pass  # 二次审查失败不阻断，保留第一次 findings
         except Exception as e:
             # 审查失败降级：不阻断，findings 保持空
             if not error_note:

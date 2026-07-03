@@ -359,8 +359,8 @@ def test_hybrid_generate_review_loop_retries_on_high_severity():
     # 第二次修正版回填
     assert "hilog" in result["files"][0]["content"], result["files"][0]["content"]
     assert "console.log" not in result["files"][0]["content"], result["files"][0]["content"]
-    # findings 字段含第一次的 finding（记录历史）
-    assert len(result["findings"]) >= 1, result["findings"]
+    # 修正后 findings 为空（当前 files 无问题）——覆盖语义：二次审查成功覆盖旧 findings
+    assert result["findings"] == [], result["findings"]
     print("[OK] test_hybrid_generate_review_loop_retries_on_high_severity")
 
 
@@ -399,6 +399,66 @@ def test_hybrid_generate_review_failure_does_not_block():
     print("[OK] test_hybrid_generate_review_failure_does_not_block")
 
 
+def test_hybrid_generate_second_review_failure_keeps_files_and_first_findings():
+    """二次审查 raise → 降级：files 用修正版，findings 保留第一次的（未被覆盖）。"""
+    import generators.framework as fw
+    import analyzers.framework as afw
+    # 第一次 LLM 填充返回有问题的代码，第二次返回修正版
+    fill_responses = [
+        '{"X.ets": {"body": "console.log(\'x\')"}}',            # 第一次：console.log
+        '{"X.ets": {"body": "hilog.info(0, \'x\', \'x\')"}}',   # 第二次：修正
+    ]
+    call_count = {"n": 0}
+    class _FillMessages:
+        async def create(self, **kwargs):
+            i = call_count["n"]
+            call_count["n"] += 1
+            return SimpleNamespace(content=[_fake_block(
+                fill_responses[i] if i < len(fill_responses) else fill_responses[-1]
+            )])
+    class _FillAnthropic:
+        def __call__(self, *a, **k): return self
+        def __init__(self): self.messages = _FillMessages()
+    # 审查 LLM：第一次返回高 severity finding，第二次 raise
+    review_count = {"n": 0}
+    class _ReviewMessages:
+        async def create(self, **kwargs):
+            i = review_count["n"]
+            review_count["n"] += 1
+            if i == 0:
+                return SimpleNamespace(content=[_fake_block(
+                    '[{"severity":"高","location":"X.ets","summary":"用了 console.log",'
+                    '"fix":"改 hilog","category":"ArkTS规范"}]'
+                )])
+            raise RuntimeError("二次审查余额不足")
+    class _ReviewAnthropic:
+        def __call__(self, *a, **k): return self
+        def __init__(self): self.messages = _ReviewMessages()
+    fill_fake = _FillAnthropic()
+    review_fake = _ReviewAnthropic()
+    fw_orig = fw.AsyncAnthropic
+    afw_orig = afw.AsyncAnthropic
+    fw.AsyncAnthropic = lambda *a, **k: fill_fake
+    afw.AsyncAnthropic = lambda *a, **k: review_fake
+    try:
+        spec = GeneratorSpec(
+            name="t", description="t", input_schema={},
+            files=[FileSpec("X.ets", "@Component struct X { __LLM:body__ }", ["body"])],
+            fill_instruction="填 body", max_tokens=256,
+        )
+        result = asyncio.run(fw.hybrid_generate(spec, {}))
+    finally:
+        fw.AsyncAnthropic = fw_orig
+        afw.AsyncAnthropic = afw_orig
+    # files 用修正版（含 hilog 不含 console.log）
+    assert "hilog" in result["files"][0]["content"], result["files"][0]["content"]
+    assert "console.log" not in result["files"][0]["content"], result["files"][0]["content"]
+    # findings 保留第一次的 1 条（二次审查 raise 未覆盖）
+    assert len(result["findings"]) == 1, result["findings"]
+    assert result["findings"][0]["summary"] == "用了 console.log", result["findings"]
+    print("[OK] test_hybrid_generate_second_review_failure_keeps_files_and_first_findings")
+
+
 def main():
     # monkeypatch 占位参数（test_llm_fill_backfilled 的形参仅为命名提示，实际通过模块级替换）
     test_render_args_replaces()
@@ -409,6 +469,7 @@ def main():
     test_missing_arg_raises()
     test_hybrid_generate_review_loop_retries_on_high_severity()
     test_hybrid_generate_review_failure_does_not_block()
+    test_hybrid_generate_second_review_failure_keeps_files_and_first_findings()
     test_smoke_character_stats()
     test_smoke_skill_system()
     test_smoke_inventory()
