@@ -143,6 +143,32 @@
   .t-node.err .t-dot { border-color: var(--err); background: var(--err); }
   .t-node.err { color: var(--err); }
   .t-node .t-tag { font-size: 10px; color: var(--muted-2); margin-left: auto; text-transform: uppercase; letter-spacing: .08em; }
+  .t-node.is-clickable {
+    cursor: pointer; border-radius: 7px; margin-left: -6px; padding-left: 20px;
+    transition: background .18s, color .18s;
+  }
+  .t-node.is-clickable:hover {
+    background: rgba(124,92,255,.1); color: var(--text);
+  }
+  .t-node.is-clickable:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+    box-shadow: inset 0 0 0 1px rgba(124,92,255,.25);
+    background: rgba(124,92,255,.08); color: var(--text);
+  }
+  .tool.tool-running { border-left: 2px solid var(--warn); }
+  .tool.tool-ok { border-left: 2px solid var(--ok); }
+  .tool.tool-err { border-left: 2px solid var(--err); }
+  .tool-status {
+    margin-left: auto; color: var(--muted-2); font-size: 10px;
+    text-transform: uppercase; letter-spacing: .08em;
+  }
+  .target-flash {
+    animation: targetFlash 1.4s ease-out both;
+  }
+  @keyframes targetFlash {
+    0% { box-shadow: 0 0 0 0 rgba(124,92,255,.75); border-color: var(--accent); }
+    100% { box-shadow: 0 0 0 12px rgba(124,92,255,0); }
+  }
   @keyframes nodein { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
   @keyframes pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: .55; } }
 
@@ -382,6 +408,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
+    .target-flash { box-shadow: 0 0 0 2px var(--accent); }
   }
 </style>
 </head>
@@ -469,6 +496,11 @@ let pendingNode = null;
 let textOpen = false;
 let currentSessionId = null;
 let currentAbort = null; // 当前 SSE 请求的 AbortController，用于删除/切换/新建会话时取消进行中流
+let toolSeq = 0;
+let cardSeq = 0;
+let activeTool = null;
+const pendingToolPhases = [];  // FIFO queue: oldest pending phase receives next file/findings/tool_result
+const toolTargets = new Map();
 const sessionsListEl = document.getElementById('sessionsList');
 const newSessionBtn = document.getElementById('newSessionBtn');
 
@@ -499,6 +531,35 @@ function shortToolName(full) {
 
 function scrollThread() { threadEl.scrollTop = threadEl.scrollHeight; }
 function scrollRail() { railEl.scrollTop = railEl.scrollHeight; railEl.scrollLeft = railEl.scrollWidth; }
+
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function ensureCardId(card, prefix) {
+  if (!card.id) {
+    cardSeq += 1;
+    card.id = prefix + '-' + String(cardSeq);
+  }
+  return card.id;
+}
+
+function focusCard(cardId) {
+  const el = document.getElementById(cardId);
+  if (!el) return;
+  el.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
+  el.classList.remove('target-flash');
+  void el.offsetWidth;
+  el.classList.add('target-flash');
+  if (!prefersReducedMotion()) setTimeout(() => el.classList.remove('target-flash'), 1400);
+}
+
+function clearToolState() {
+  toolSeq = 0;
+  activeTool = null;
+  pendingToolPhases.length = 0;
+  toolTargets.clear();
+}
 
 // ── 会话列表 ──
 async function loadSessions() {
@@ -562,6 +623,7 @@ function clearAll() {
   // 重建 DOM 后更新全局引用，否则 railEmpty 仍指向被移除的旧节点
   railEmpty = document.getElementById('railEmpty');
   turnNo = 0; currentGroup = null; pendingNode = null; currentBot = null; textOpen = false;
+  clearToolState();
 }
 
 function newSession() {
@@ -596,22 +658,17 @@ async function switchSession(sid) {
 }
 
 function replayEvents(events) {
-  // 回放按回合分段：session_started 设 id 不渲染；done/error → finalizeBot 结束当前回合；
-  // 其余事件（text/tool_use/file/findings/tool_result）→ 若当前无活跃回合则先 startTurn('历史回放')。
-  // 这样多轮回放显示多个独立 bot 气泡，不会把下一轮 text 拼到上一轮 bubble。
+  // 回放按回合分段：session_started 设 id 不渲染；其余事件（含 done/error）→ 若当前无活跃回合则先 startTurn。
+  // done/error 仍通过 handleEvent() 处理，保证共享清理逻辑（settlePhase、错误渲染）运行。
+  // 但 done/error 作为回合收尾事件不应单独开新回合，只有内容事件（text/tool_use/file/findings/tool_result）才开回合。
   for (const { event, data } of events) {
     if (event === 'session_started') {
       currentSessionId = data.session_id;
       continue;
     }
-    if (event === 'done' || event === 'error') {
-      // 结束当前回合：不渲染 done 卡片，但关闭 bot bubble + 清 currentGroup 防止下一轮 text 拼接
-      finalizeBot();
-      currentGroup = null;
-      continue;
-    }
-    // 其余事件：若无活跃回合（首轮或上一轮已 finalize），先开新回合
-    if (currentGroup === null) {
+    // done/error 是回合收尾，不需要新回合容器；只有内容事件才开新回合
+    const isTurnClosing = (event === 'done' || event === 'error');
+    if (currentGroup === null && !isTurnClosing) {
       hideEmpty();
       startTurn('历史回放');
     }
@@ -696,14 +753,15 @@ function removeTyping() {
 
 function finalizeBot() { currentBot = null; textOpen = false; }
 
-function addToolCard(name, input) {
+function addToolCard(name, input, meta = {}) {
   finalizeBot();
   const div = document.createElement('div');
-  div.className = 'tool';
+  div.className = 'tool tool-running open';
   const head = document.createElement('div');
   head.className = 'tool-head';
-  head.innerHTML = '<span class="t-glyph">▣</span><span class="t-name"></span><span class="t-chev">▶</span>';
+  head.innerHTML = '<span class="t-glyph">▣</span><span class="t-name"></span><span class="tool-status"></span><span class="t-chev">▶</span>';
   head.querySelector('.t-name').textContent = '调用 · ' + shortToolName(name);
+  head.querySelector('.tool-status').textContent = meta.status || '运行中';
   const body = document.createElement('div');
   body.className = 'tool-body';
   const pre = document.createElement('pre');
@@ -713,6 +771,7 @@ function addToolCard(name, input) {
   div.appendChild(head); div.appendChild(body);
   messagesEl.appendChild(div);
   scrollThread();
+  return div;
 }
 
 function addResultCard(text, isError) {
@@ -730,6 +789,7 @@ function addResultCard(text, isError) {
   div.appendChild(head); div.appendChild(body);
   messagesEl.appendChild(div);
   scrollThread();
+  return div;
 }
 
 function addFileCard(path, content, isError) {
@@ -772,6 +832,7 @@ function addFileCard(path, content, isError) {
   }
   messagesEl.appendChild(div);
   scrollThread();
+  return div;
 }
 
 function severityRank(s) {
@@ -786,7 +847,7 @@ function addFindingsCards(findings, isError) {
     div.innerHTML = `<div class="bubble"><p${isError ? ' style="color:var(--err)"' : ''}>${isError ? '⚠ 分析工具返回错误状态（无结果）' : '✓ 无发现'}</p></div>`;
     messagesEl.appendChild(div);
     scrollThread();
-    return;
+    return div;
   }
   if (isError) {
     const warn = document.createElement('div');
@@ -795,8 +856,10 @@ function addFindingsCards(findings, isError) {
     messagesEl.appendChild(warn);
   }
   const sorted = [...findings].sort((a,b) => severityRank(a.severity) - severityRank(b.severity));
+  let firstCard = null;
   for (const f of sorted) {
     const div = document.createElement('div');
+    if (!firstCard) firstCard = div;
     div.className = 'tool open';
     const sev = String(f.severity || '?');
     const sevColor = {'高':'var(--err)','中':'var(--warn)','低':'#60a5fa'}[sev] || 'var(--muted-2)';
@@ -828,6 +891,7 @@ function addFindingsCards(findings, isError) {
     messagesEl.appendChild(div);
   }
   scrollThread();
+  return firstCard;
 }
 
 function addErrorBar(msg) {
@@ -860,7 +924,26 @@ function startTurn(prompt) {
   textOpen = false;
 }
 
-function traceNode(label, status, tag) {
+function bindTraceNode(node, cardId) {
+  node.dataset.targetId = cardId;
+  node.classList.add('is-clickable');
+  node.setAttribute('role', 'button');
+  node.setAttribute('tabindex', '0');
+  const labelEl = node.querySelector('.t-label');
+  const labelText = labelEl ? labelEl.textContent : '';
+  node.setAttribute('aria-label', '定位到右侧详情：' + labelText);
+  if (node.dataset.bound === '1') return;
+  node.dataset.bound = '1';
+  node.addEventListener('click', () => focusCard(node.dataset.targetId));
+  node.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      focusCard(node.dataset.targetId);
+    }
+  });
+}
+
+function traceNode(label, status, tag, targetId) {
   if (!currentGroup) return null;
   const spine = currentGroup.querySelector('.spine');
   const node = document.createElement('div');
@@ -868,9 +951,68 @@ function traceNode(label, status, tag) {
   node.innerHTML = '<span class="t-dot"></span><span class="t-label"></span>' + (tag ? '<span class="t-tag"></span>' : '');
   node.querySelector('.t-label').textContent = label;
   if (tag) node.querySelector('.t-tag').textContent = tag;
+  if (targetId) bindTraceNode(node, targetId);
   spine.appendChild(node);
   scrollRail();
   return node;
+}
+
+function linkTraceToCard(phase, card, preferDetail = true) {
+  if (!phase || !card) return;
+  const cardId = ensureCardId(card, phase.id + '-card');
+  const target = toolTargets.get(phase.id);
+  if (target) {
+    if (!target.primaryCard || preferDetail) target.primaryCard = card;
+    target.detailCards.push(card);
+  }
+  phase.primaryTargetId = cardId;
+  bindTraceNode(phase.node, cardId);
+}
+
+function setToolPhaseStatus(phase, status, tag) {
+  if (!phase) return;
+  phase.status = status;
+  phase.toolCard.classList.remove('tool-running', 'tool-ok', 'tool-err');
+  phase.toolCard.classList.add(status === 'err' ? 'tool-err' : status === 'ok' ? 'tool-ok' : 'tool-running');
+  const statusEl = phase.toolCard.querySelector('.tool-status');
+  if (statusEl) statusEl.textContent = tag;
+  // Preserve is-clickable when updating node status — direct className assignment drops it
+  const clickable = phase.node.dataset.targetId ? ' is-clickable' : '';
+  phase.node.className = 't-node ' + status + clickable;
+  const tagEl = phase.node.querySelector('.t-tag');
+  if (tagEl) tagEl.textContent = tag;
+}
+
+function createToolPhase(name, input) {
+  if (!currentGroup) return null;
+  toolSeq += 1;
+  const id = 'tool-' + String(toolSeq);
+  const toolCard = addToolCard(name, input, { status: '运行中' });
+  const cardId = ensureCardId(toolCard, id + '-card');
+  const node = traceNode(shortToolName(name), 'pending', '运行中', cardId);
+  const phase = { id, node, toolCard, primaryTargetId: cardId, status: 'pending' };
+  toolTargets.set(id, { node, primaryCard: toolCard, detailCards: [] });
+  pendingToolPhases.push(phase);
+  activeTool = phase;
+  return phase;
+}
+
+// Find the tool phase that should receive a settle event (file/findings/tool_result).
+// file events stay on the current activeTool (Write tools emit multiple file events before tool_result).
+// findings/tool_result settle the oldest pending phase (FIFO), since no backend tool_use_id exists.
+function resolveSettlePhase(eventType) {
+  if (eventType === 'file' && activeTool) return activeTool;
+  // findings / tool_result / file with no activeTool: settle oldest pending phase
+  if (pendingToolPhases.length) return pendingToolPhases[0];
+  return null;
+}
+
+// Remove a settled phase from the pending queue
+function settlePhase(phase) {
+  if (!phase) return;
+  const idx = pendingToolPhases.indexOf(phase);
+  if (idx !== -1) pendingToolPhases.splice(idx, 1);
+  if (activeTool === phase) activeTool = null;
 }
 
 function parseSSE(raw) {
@@ -896,47 +1038,83 @@ function handleEvent(event, data) {
       break;
     case 'tool_use':
       finalizeBot();
-      addToolCard(data.name, data.input);
-      pendingNode = traceNode(shortToolName(data.name), 'pending', '运行中');
+      activeTool = createToolPhase(data.name, data.input);
+      pendingNode = activeTool ? activeTool.node : null;
       break;
-    case 'file':
+    case 'file': {
       finalizeBot();
-      addFileCard(data.path, data.content, data.is_error);
-      if (pendingNode) {
+      const card = addFileCard(data.path, data.content, data.is_error);
+      const phase = resolveSettlePhase('file');
+      if (phase) {
+        setToolPhaseStatus(phase, data.is_error ? 'err' : 'ok', data.is_error ? '失败' : '文件');
+        linkTraceToCard(phase, card, true);
+      } else if (pendingNode) {
         pendingNode.className = 't-node ' + (data.is_error ? 'err' : 'ok');
         const tag = pendingNode.querySelector('.t-tag');
         if (tag) tag.textContent = data.is_error ? '失败' : '文件';
-        pendingNode = null;
       }
       break;
-    case 'findings':
+    }
+    case 'findings': {
       finalizeBot();
-      addFindingsCards(data.findings || [], data.is_error);
-      if (pendingNode) {
+      const findings = data.findings || [];
+      const card = addFindingsCards(findings, data.is_error);
+      const phase = resolveSettlePhase('findings');
+      if (phase) {
+        setToolPhaseStatus(phase, data.is_error ? 'err' : 'ok', data.is_error ? '失败' : `${findings.length} 条`);
+        linkTraceToCard(phase, card, true);
+        settlePhase(phase);
+        pendingNode = null;
+      } else if (pendingNode) {
         pendingNode.className = 't-node ' + (data.is_error ? 'err' : 'ok');
         const tag = pendingNode.querySelector('.t-tag');
-        if (tag) tag.textContent = `${(data.findings || []).length} 条`;
+        if (tag) tag.textContent = `${findings.length} 条`;
         pendingNode = null;
       }
       break;
-    case 'tool_result':
+    }
+    case 'tool_result': {
       finalizeBot();
-      addResultCard(data.text || '', data.is_error);
-      if (pendingNode) {
+      const card = addResultCard(data.text || '', data.is_error);
+      const phase = resolveSettlePhase('tool_result');
+      if (phase) {
+        setToolPhaseStatus(phase, data.is_error ? 'err' : 'ok', data.is_error ? '失败' : '完成');
+        const target = toolTargets.get(phase.id);
+        linkTraceToCard(phase, card, !(target && target.detailCards.length));
+        settlePhase(phase);
+        pendingNode = null;
+      } else if (pendingNode) {
         pendingNode.className = 't-node ' + (data.is_error ? 'err' : 'ok');
         const tag = pendingNode.querySelector('.t-tag');
         if (tag) tag.textContent = data.is_error ? '失败' : '完成';
         pendingNode = null;
       }
       break;
+    }
     case 'done':
       finalizeBot();
+      // done 不产生新卡片，仅收尾当前回合：关闭 bot bubble、清理活跃工具阶段
+      // done/error 也需清理所有未收尾的 pending phases
+      while (pendingToolPhases.length) {
+        const p = pendingToolPhases.shift();
+        setToolPhaseStatus(p, 'ok', '完成');
+      }
+      activeTool = null;
       if (pendingNode) { pendingNode.className = 't-node ok'; pendingNode = null; }
+      // 关闭当前回合，防止下一轮 text 拼接
+      currentGroup = null;
       break;
     case 'error':
       finalizeBot();
       addErrorBar(data.message || '未知错误');
+      while (pendingToolPhases.length) {
+        const p = pendingToolPhases.shift();
+        setToolPhaseStatus(p, 'err', '失败');
+      }
+      activeTool = null;
       if (pendingNode) { pendingNode.className = 't-node err'; pendingNode = null; }
+      // 关闭当前回合，防止下一轮 text 拼接
+      currentGroup = null;
       break;
   }
 }
