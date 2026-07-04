@@ -56,6 +56,8 @@ def test_review_returns_text_and_uses_framework():
     assert system.startswith("你是一名资深 HarmonyOS ArkTS 代码审查专家")
     assert "JSON 数组" in system, "system_prompt 应要求 JSON 数组输出"
     assert "category" in system, "system_prompt 应声明 category 特有字段"
+    assert "compatibleSdkVersion" in system, "system_prompt 应声明兼容 SDK 基线"
+    assert "6.1.0(23)" in system, "system_prompt 应要求 HarmonyOS 6.1.0(23)+"
     assert result["content"][0]["text"] == payload
     print("[OK] test_review_returns_text_and_uses_framework")
 

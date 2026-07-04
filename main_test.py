@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from main import _extract_tool_result_text, _raw_tool_result_text
+from main import AGENT_SYSTEM_PROMPT, _extract_tool_result_text, _raw_tool_result_text
 
 
 def _block(text: str, is_error: bool = False):
@@ -54,12 +54,21 @@ def test_raw_handles_str_content():
     print("[OK] test_raw_handles_str_content")
 
 
+def test_agent_prompt_requires_harmonyos_610_api23_policy():
+    assert "compatibleSdkVersion" in AGENT_SYSTEM_PROMPT
+    assert "6.1.0(23)" in AGENT_SYSTEM_PROMPT
+    assert "API 23" in AGENT_SYSTEM_PROMPT
+    assert "更低版本" in AGENT_SYSTEM_PROMPT
+    print("[OK] test_agent_prompt_requires_harmonyos_610_api23_policy")
+
+
 def main():
     test_raw_extracts_text_asis()
     test_extract_formats_findings_json()
     test_extract_falls_back_for_non_json()
     test_extract_falls_back_for_files_json()
     test_raw_handles_str_content()
+    test_agent_prompt_requires_harmonyos_610_api23_policy()
     print("\n全部通过。")
 
 

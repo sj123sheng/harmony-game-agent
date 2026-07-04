@@ -13,7 +13,7 @@ from types import SimpleNamespace
 # 让 generators 包可被导入
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
 
-from generators.framework import FileSpec, GeneratorSpec, hybrid_generate
+from generators.framework import FileSpec, GeneratorSpec, _FILLER_SYSTEM, hybrid_generate
 from generators import (
     build_character_stats_spec,
     build_enemy_ai_spec,
@@ -205,6 +205,15 @@ def test_missing_arg_raises():
         print("[OK] test_missing_arg_raises")
         return
     raise AssertionError("应抛 ValueError")
+
+
+def test_filler_system_requires_harmonyos_610_api23_policy():
+    """LLM 填充器必须以 HarmonyOS 6.1.0(23)+ 为生成基线。"""
+    assert "compatibleSdkVersion" in _FILLER_SYSTEM
+    assert "6.1.0(23)" in _FILLER_SYSTEM
+    assert "API 23" in _FILLER_SYSTEM
+    assert "低版本" in _FILLER_SYSTEM
+    print("[OK] test_filler_system_requires_harmonyos_610_api23_policy")
 
 
 # ---------- 冒烟测试：4 个生成器 ----------
@@ -467,6 +476,7 @@ def main():
     test_degradation_on_llm_exception()
     test_multi_file_order()
     test_missing_arg_raises()
+    test_filler_system_requires_harmonyos_610_api23_policy()
     test_hybrid_generate_review_loop_retries_on_high_severity()
     test_hybrid_generate_review_failure_does_not_block()
     test_hybrid_generate_second_review_failure_keeps_files_and_first_findings()

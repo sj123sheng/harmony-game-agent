@@ -4,8 +4,11 @@
 保证生成期审查与用户主动审查用同一 checklist。
 """
 
+from harmony_sdk_policy import SDK_REVIEW_POLICY_TEXT
+
 REVIEW_SYSTEM_PROMPT = (
     "你是一名资深 HarmonyOS ArkTS 代码审查专家。对用户给出的 ArkTS 代码进行审查，"
+    f"{SDK_REVIEW_POLICY_TEXT}"
     "从以下维度逐一检查并报告问题：\n"
     "1. 组件结构：@Component/@Entry/build() 是否完整、是否符合 ArkTS 组件规范\n"
     "2. 状态管理：@State/@Prop/@Link 使用是否合理，是否有冗余状态\n"

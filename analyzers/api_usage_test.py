@@ -49,6 +49,13 @@ def test_system_prompt_mentions_v1_v2():
     print("[OK] test_system_prompt_mentions_v1_v2")
 
 
+def test_system_prompt_requires_harmonyos_610_api23_policy():
+    assert "compatibleSdkVersion" in _API_SYSTEM_PROMPT
+    assert "6.1.0(23)" in _API_SYSTEM_PROMPT
+    assert "API 23" in _API_SYSTEM_PROMPT
+    print("[OK] test_system_prompt_requires_harmonyos_610_api23_policy")
+
+
 def test_check_api_usage_returns_text():
     with tempfile.TemporaryDirectory() as d:
         Path(d, "skill").mkdir()
@@ -79,6 +86,7 @@ def test_check_api_usage_uses_2048_tokens():
 
 def main():
     test_system_prompt_mentions_v1_v2()
+    test_system_prompt_requires_harmonyos_610_api23_policy()
     test_check_api_usage_returns_text()
     test_check_api_usage_uses_2048_tokens()
     print("\n全部通过。")

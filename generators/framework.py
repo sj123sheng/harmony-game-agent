@@ -15,15 +15,16 @@ from anthropic import AsyncAnthropic
 
 from analyzers.framework import FileRef, analyze_with_context
 from analyzers.review_prompt import REVIEW_SYSTEM_PROMPT
+from harmony_sdk_policy import SDK_POLICY_TEXT
 
 _ARG_SLOT = re.compile(r"__ARG:(\w+)__")
 _LLM_SLOT = re.compile(r"__LLM:(\w+)__")
 
 _FILLER_SYSTEM = (
     "你是鸿蒙 ArkTS 代码填充器。只输出一个 JSON 对象，"
-"格式为 {\"<文件路径>\": {\"<占位符名>\": \"<填充代码>\"}}，"
-"不要输出任何额外解释、不要 markdown 代码块标记。"
-"填充代码须是合法 ArkTS 片段，符合鸿蒙 ArkTS/ArkUI 规范。"
+    "格式为 {\"<文件路径>\": {\"<占位符名>\": \"<填充代码>\"}}，"
+    "不要输出任何额外解释、不要 markdown 代码块标记。"
+    f"填充代码须是合法 ArkTS 片段，符合鸿蒙 ArkTS/ArkUI 规范。{SDK_POLICY_TEXT}"
 )
 
 

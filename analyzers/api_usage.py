@@ -1,9 +1,11 @@
 """API 用法纠错工具。"""
 
 from analyzers.framework import analyze_with_context, resolve_scope
+from harmony_sdk_policy import SDK_REVIEW_POLICY_TEXT
 
 _API_SYSTEM_PROMPT = (
     "你是一名 HarmonyOS ArkTS/ArkUI API 用法审查专家。检查以下问题：\n"
+    f"{SDK_REVIEW_POLICY_TEXT}\n"
     "1. API 误用：参数类型/数量错、调用时机错、返回值未处理\n"
     "2. 已废弃接口：是否用了标记 deprecated 的旧 API，应换什么\n"
     "3. V1/V2 状态管理混用：V1（@State/@Prop/@Link/@Observed/@ObjectLink）与 "

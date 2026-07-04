@@ -301,13 +301,14 @@ def test_build_spec_has_all_deterministic_files():
     expected = [
         "AppScope/app.json5",
         "AppScope/resources/base/element/string.json",
-        "AppScope/resources/base/element/color.json",
+        "AppScope/resources/base/media/app_icon.svg",
         "entry/src/main/module.json5",
         "entry/src/main/ets/entryability/EntryAbility.ets",
         "entry/src/main/ets/pages/Index.ets",
         "entry/src/main/resources/base/element/string.json",
         "entry/src/main/resources/base/element/color.json",
         "entry/src/main/resources/base/element/float.json",
+        "entry/src/main/resources/base/media/startIcon.svg",
         "entry/src/main/resources/base/profile/main_pages.json",
         "entry/src/main/resources/en_US/element/string.json",
         "entry/src/main/resources/zh_CN/element/string.json",
@@ -328,7 +329,7 @@ def test_scaffold_includes_missing_deveco_files():
     paths = [f.path for f in spec.files]
     assert "entry/oh-package.json5" in paths, "缺模块级 oh-package.json5"
     assert "AppScope/resources/base/element/string.json" in paths
-    assert "AppScope/resources/base/element/color.json" in paths
+    assert "AppScope/resources/base/element/color.json" not in paths
     # signingConfig 不引用空 signingConfigs
     root_build = [f for f in spec.files if f.path == "build-profile.json5"][0].template
     assert '"signingConfig"' not in root_build, "root build-profile 不得引用空 signingConfigs"
@@ -337,6 +338,80 @@ def test_scaffold_includes_missing_deveco_files():
     app = [f for f in spec.files if f.path == "AppScope/app.json5"][0].template
     assert "minAPIVersion" in app
     print("[OK] test_scaffold_includes_missing_deveco_files")
+
+
+def test_templates_do_not_reference_missing_media_resources():
+    """纯文本脚手架只允许引用自身生成的 SVG 图标。"""
+    spec = build_deveco_project_spec([])
+    app = next(f for f in spec.files if f.path == "AppScope/app.json5").template
+    module = next(f for f in spec.files if f.path == "entry/src/main/module.json5").template
+    paths = {f.path for f in spec.files}
+    assert '"icon": "$media:app_icon"' in app
+    assert "AppScope/resources/base/media/app_icon.svg" in paths
+    assert '"startWindowIcon": "$media:startIcon"' in module
+    assert "entry/src/main/resources/base/media/startIcon.svg" in paths
+    print("[OK] test_templates_do_not_reference_missing_media_resources")
+
+
+def test_entry_resources_do_not_duplicate_appscope_resources():
+    """entry 资源不应重复声明 AppScope 的 app_name，避免资源编译冲突。"""
+    spec = build_deveco_project_spec([])
+    entry_strings = [
+        f.template for f in spec.files
+        if f.path in {
+            "entry/src/main/resources/base/element/string.json",
+            "entry/src/main/resources/en_US/element/string.json",
+            "entry/src/main/resources/zh_CN/element/string.json",
+        }
+    ]
+    assert entry_strings
+    assert all('"name": "app_name"' not in s for s in entry_strings)
+    print("[OK] test_entry_resources_do_not_duplicate_appscope_resources")
+
+
+def test_app_json_uses_resource_label_reference():
+    """app.label 必须引用字符串资源，普通展示名会被 DevEco schema 拒绝。"""
+    spec = build_deveco_project_spec([])
+    app = next(f for f in spec.files if f.path == "AppScope/app.json5").template
+    assert '"label": "$string:app_name"' in app
+    assert '"label": "__ARG:label__"' not in app
+    print("[OK] test_app_json_uses_resource_label_reference")
+
+
+def test_module_json_uses_current_delivery_fields():
+    """DevEco 6.x module schema 使用 deliveryWithInstall/installationFree。"""
+    spec = build_deveco_project_spec([])
+    module = next(f for f in spec.files if f.path == "entry/src/main/module.json5").template
+    assert '"deliveryWithInstall": true' in module
+    assert '"installationFree": false' in module
+    assert '"pages": "$profile:main_pages"' in module
+    assert "deliveryInstallOption" not in module
+    print("[OK] test_module_json_uses_current_delivery_fields")
+
+
+def test_build_spec_uses_current_hvigor_ohos_plugin_tasks():
+    """DevEco 6.x 模板应使用 hvigor-ohos-plugin，entry 模块应使用 hapTasks。"""
+    spec = build_deveco_project_spec([])
+    root_hvigor = next(f for f in spec.files if f.path == "hvigorfile.ts").template
+    entry_hvigor = next(f for f in spec.files if f.path == "entry/hvigorfile.ts").template
+    assert "from '@ohos/hvigor-ohos-plugin'" in root_hvigor
+    assert "appTasks" in root_hvigor
+    assert "from '@ohos/hvigor-ohos-plugin'" in entry_hvigor
+    assert "hapTasks" in entry_hvigor
+    assert "appTasks" not in entry_hvigor
+    print("[OK] test_build_spec_uses_current_hvigor_ohos_plugin_tasks")
+
+
+def test_build_profile_targets_harmonyos_610_api23_plus():
+    """DevEco 工程模板必须面向 compatibleSdkVersion 6.1.0(23)+。"""
+    spec = build_deveco_project_spec([])
+    root_build = next(f for f in spec.files if f.path == "build-profile.json5").template
+    assert '"compatibleSdkVersion": "6.1.0(23)"' in root_build
+    assert '"targetSdkVersion": "6.1.0(23)"' in root_build
+    assert '"runtimeOS": "HarmonyOS"' in root_build
+    entry_build = next(f for f in spec.files if f.path == "entry/build-profile.json5").template
+    assert '"runtimeOS": "HarmonyOS"' in entry_build
+    print("[OK] test_build_profile_targets_harmonyos_610_api23_plus")
 
 
 def test_build_spec_index_ets_has_llm_slot():
@@ -553,6 +628,12 @@ def main():
     test_build_spec_fill_instruction_lists_imports()
     test_build_spec_fill_instruction_empty_when_no_subsystems()
     test_scaffold_includes_missing_deveco_files()
+    test_templates_do_not_reference_missing_media_resources()
+    test_entry_resources_do_not_duplicate_appscope_resources()
+    test_app_json_uses_resource_label_reference()
+    test_module_json_uses_current_delivery_fields()
+    test_build_spec_uses_current_hvigor_ohos_plugin_tasks()
+    test_build_profile_targets_harmonyos_610_api23_plus()
     # run_scaffold
     test_run_scaffold_copies_subsystem_files_with_project_prefix()
     test_run_scaffold_empty_scan_dir_still_produces_skeleton()
