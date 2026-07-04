@@ -788,6 +788,7 @@ function addResultCard(text, isError) {
   div.appendChild(head); div.appendChild(body);
   messagesEl.appendChild(div);
   scrollThread();
+  return div;
 }
 
 function addFileCard(path, content, isError) {
@@ -830,6 +831,7 @@ function addFileCard(path, content, isError) {
   }
   messagesEl.appendChild(div);
   scrollThread();
+  return div;
 }
 
 function severityRank(s) {
@@ -844,7 +846,7 @@ function addFindingsCards(findings, isError) {
     div.innerHTML = `<div class="bubble"><p${isError ? ' style="color:var(--err)"' : ''}>${isError ? '⚠ 分析工具返回错误状态（无结果）' : '✓ 无发现'}</p></div>`;
     messagesEl.appendChild(div);
     scrollThread();
-    return;
+    return div;
   }
   if (isError) {
     const warn = document.createElement('div');
@@ -853,8 +855,10 @@ function addFindingsCards(findings, isError) {
     messagesEl.appendChild(warn);
   }
   const sorted = [...findings].sort((a,b) => severityRank(a.severity) - severityRank(b.severity));
+  let firstCard = null;
   for (const f of sorted) {
     const div = document.createElement('div');
+    if (!firstCard) firstCard = div;
     div.className = 'tool open';
     const sev = String(f.severity || '?');
     const sevColor = {'高':'var(--err)','中':'var(--warn)','低':'#60a5fa'}[sev] || 'var(--muted-2)';
@@ -886,6 +890,7 @@ function addFindingsCards(findings, isError) {
     messagesEl.appendChild(div);
   }
   scrollThread();
+  return firstCard;
 }
 
 function addErrorBar(msg) {
@@ -1012,43 +1017,68 @@ function handleEvent(event, data) {
       activeTool = createToolPhase(data.name, data.input);
       pendingNode = activeTool ? activeTool.node : null;
       break;
-    case 'file':
+    case 'file': {
       finalizeBot();
-      addFileCard(data.path, data.content, data.is_error);
-      if (pendingNode) {
+      const card = addFileCard(data.path, data.content, data.is_error);
+      if (activeTool) {
+        setToolPhaseStatus(activeTool, data.is_error ? 'err' : 'ok', data.is_error ? '失败' : '文件');
+        linkTraceToCard(activeTool, card, true);
+      } else if (pendingNode) {
         pendingNode.className = 't-node ' + (data.is_error ? 'err' : 'ok');
         const tag = pendingNode.querySelector('.t-tag');
         if (tag) tag.textContent = data.is_error ? '失败' : '文件';
-        pendingNode = null;
       }
       break;
-    case 'findings':
+    }
+    case 'findings': {
       finalizeBot();
-      addFindingsCards(data.findings || [], data.is_error);
-      if (pendingNode) {
+      const findings = data.findings || [];
+      const card = addFindingsCards(findings, data.is_error);
+      if (activeTool) {
+        setToolPhaseStatus(activeTool, data.is_error ? 'err' : 'ok', data.is_error ? '失败' : `${findings.length} 条`);
+        linkTraceToCard(activeTool, card, true);
+        activeTool = null;
+        pendingNode = null;
+      } else if (pendingNode) {
         pendingNode.className = 't-node ' + (data.is_error ? 'err' : 'ok');
         const tag = pendingNode.querySelector('.t-tag');
-        if (tag) tag.textContent = `${(data.findings || []).length} 条`;
+        if (tag) tag.textContent = `${findings.length} 条`;
         pendingNode = null;
       }
       break;
-    case 'tool_result':
+    }
+    case 'tool_result': {
       finalizeBot();
-      addResultCard(data.text || '', data.is_error);
-      if (pendingNode) {
+      const card = addResultCard(data.text || '', data.is_error);
+      if (activeTool) {
+        setToolPhaseStatus(activeTool, data.is_error ? 'err' : 'ok', data.is_error ? '失败' : '完成');
+        const target = toolTargets.get(activeTool.id);
+        linkTraceToCard(activeTool, card, !(target && target.detailCards.length));
+        activeTool = null;
+        pendingNode = null;
+      } else if (pendingNode) {
         pendingNode.className = 't-node ' + (data.is_error ? 'err' : 'ok');
         const tag = pendingNode.querySelector('.t-tag');
         if (tag) tag.textContent = data.is_error ? '失败' : '完成';
         pendingNode = null;
       }
       break;
+    }
     case 'done':
       finalizeBot();
+      if (activeTool) {
+        setToolPhaseStatus(activeTool, 'ok', '完成');
+        activeTool = null;
+      }
       if (pendingNode) { pendingNode.className = 't-node ok'; pendingNode = null; }
       break;
     case 'error':
       finalizeBot();
       addErrorBar(data.message || '未知错误');
+      if (activeTool) {
+        setToolPhaseStatus(activeTool, 'err', '失败');
+        activeTool = null;
+      }
       if (pendingNode) { pendingNode.className = 't-node err'; pendingNode = null; }
       break;
   }
